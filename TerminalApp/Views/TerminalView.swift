@@ -221,7 +221,7 @@ struct TerminalView: View {
                     exportStatusIsError = false
                     exportStatus = "Exported to Google Docs"
                     if let url = URL(string: docURL) {
-                        UIApplication.shared.open(url)
+                        await UIApplication.shared.open(url)
                     }
                 } else if let error = result["error"] as? String {
                     exportStatusIsError = true
