@@ -185,6 +185,8 @@ private final class SSHConnection {
         self.onDisconnect = onDisconnect
     }
 
+    private var keepaliveTask: RepeatedTask?
+
     func connect() {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.group = group
@@ -255,6 +257,7 @@ private final class SSHConnection {
     }
 
     func disconnect() {
+        stopKeepalive()
         if let channel, group != nil {
             channel.closeFuture.whenComplete { [weak self] _ in
                 self?.shutdownGroup()
@@ -265,6 +268,27 @@ private final class SSHConnection {
         }
         sessionChannel = nil
         channel = nil
+    }
+
+    private func startKeepalive(on channel: Channel) {
+        stopKeepalive()
+        // Send an SSH channel data keepalive every 15 seconds to prevent idle timeout
+        keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
+            initialDelay: .seconds(15),
+            delay: .seconds(15)
+        ) { [weak self] _ in
+            guard let self, let sc = self.sessionChannel else { return }
+            // Send empty ignore data — keeps the connection alive without affecting the shell
+            var buffer = sc.allocator.buffer(capacity: 0)
+            // Write nothing — just flush to keep TCP alive
+            sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
+        }
+        sshLog.info("SSH keepalive started (15s interval)")
+    }
+
+    private func stopKeepalive() {
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
     }
 
     // MARK: - Private
@@ -314,6 +338,8 @@ private final class SSHConnection {
                         self.sessionChannel = childChannel
                         // BUG FIX: Do NOT call onConnected here — wait for ChannelSuccessEvent
                         sshLog.info("SSH session channel created, waiting for shell ready...")
+                        // Start keepalive — send a zero-length NOP every 15s to prevent idle disconnect
+                        self.startKeepalive(on: childChannel)
                     }
                 }
             }

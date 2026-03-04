@@ -136,6 +136,11 @@ struct TerminalView: View {
                     }
                     .disabled(!ssh.isConnected || isExporting)
 
+                    NavigationLink(destination: SessionLogsView()) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundColor(AppTheme.accent)
+                    }
+
                     NavigationLink(destination: SettingsView()) {
                         Image(systemName: "gear")
                             .foregroundColor(AppTheme.accent)

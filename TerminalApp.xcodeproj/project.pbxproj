@@ -11,6 +11,7 @@
 		TA000001000002 /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000002 /* TerminalView.swift */; };
 		TA000001000003 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000003 /* SettingsView.swift */; };
 		TA000001000004 /* SSHTerminalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000004 /* SSHTerminalService.swift */; };
+		TA000001000011 /* SessionLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000007 /* SessionLogsView.swift */; };
 		TA000001000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = TA000002000005 /* Assets.xcassets */; };
 		TA000001000006 /* TimSharedKit in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000001 /* TimSharedKit */; };
 		TA000001000007 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000002 /* SwiftTerm */; };
@@ -24,6 +25,7 @@
 		TA000002000002 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
 		TA000002000003 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		TA000002000004 /* SSHTerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTerminalService.swift; sourceTree = "<group>"; };
+		TA000002000007 /* SessionLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLogsView.swift; sourceTree = "<group>"; };
 		TA000002000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		TA000002000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,6 +80,7 @@
 			children = (
 				TA000002000002 /* TerminalView.swift */,
 				TA000002000003 /* SettingsView.swift */,
+				TA000002000007 /* SessionLogsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -175,6 +178,7 @@
 				TA000001000001 /* TerminalApp.swift in Sources */,
 				TA000001000002 /* TerminalView.swift in Sources */,
 				TA000001000003 /* SettingsView.swift in Sources */,
+				TA000001000011 /* SessionLogsView.swift in Sources */,
 				TA000001000004 /* SSHTerminalService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
