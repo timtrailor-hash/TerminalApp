@@ -7,5 +7,9 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to upload to the server</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Select photos to upload to the server</string>
 </dict>
 </plist>
