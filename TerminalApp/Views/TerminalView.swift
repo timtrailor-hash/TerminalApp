@@ -211,21 +211,42 @@ struct TerminalView: View {
 
         Task {
             do {
-                let result = try await HTTPClient.post(
-                    path: "/terminal-to-doc",
-                    body: ["text": text],
-                    connection: server
-                )
+                guard let url = URL(string: "\(server.baseURL)/terminal-to-doc") else {
+                    isExporting = false
+                    exportStatusIsError = true
+                    exportStatus = "Bad URL: \(server.baseURL)/terminal-to-doc"
+                    return
+                }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if !server.authToken.isEmpty {
+                    request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+                }
+
+                // Strip control characters that break JSON
+                let cleanText = text.unicodeScalars.filter { $0.value >= 32 || $0 == "\n" || $0 == "\r" || $0 == "\t" }.map(String.init).joined()
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["text": cleanText])
+
+                let (data, response) = try await URLSession.shared.data(for: request)
                 isExporting = false
-                if let docURL = result["doc_url"] as? String {
+
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard statusCode < 400 else {
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    exportStatusIsError = true
+                    exportStatus = "Server error \(statusCode): \(body.prefix(100))"
+                    return
+                }
+
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let docURL = json["doc_url"] as? String {
                     exportStatusIsError = false
                     exportStatus = "Exported to Google Docs"
-                    if let url = URL(string: docURL) {
-                        await UIApplication.shared.open(url)
+                    if let openURL = URL(string: docURL) {
+                        await UIApplication.shared.open(openURL)
                     }
-                } else if let error = result["error"] as? String {
-                    exportStatusIsError = true
-                    exportStatus = error
                 } else {
                     exportStatusIsError = false
                     exportStatus = "Exported"
