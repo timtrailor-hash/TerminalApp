@@ -15,6 +15,10 @@ struct TerminalView: View {
     @AppStorage("sshPassword") private var sshPassword = ""
 
     @State private var terminalTitle = "Terminal"
+    @State private var isExporting = false
+    @State private var exportStatus: String?
+    @State private var exportStatusIsError = false
+    @State private var terminalViewRef: STTerminalView?
 
     private var serverIP: String {
         String(server.serverHost.split(separator: ":").first ?? "100.126.253.40")
@@ -25,7 +29,7 @@ struct TerminalView: View {
             AppTheme.background.ignoresSafeArea()
 
             if ssh.isConnected {
-                SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle)
+                SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle, terminalViewRef: $terminalViewRef)
             } else if ssh.isConnecting {
                 connectingView
             } else {
@@ -52,6 +56,19 @@ struct TerminalView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 14) {
+                    Button {
+                        exportToGoogleDocs()
+                    } label: {
+                        if isExporting {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "doc.text")
+                                .foregroundColor(AppTheme.accent)
+                        }
+                    }
+                    .disabled(!ssh.isConnected || isExporting)
+
                     NavigationLink(destination: SettingsView()) {
                         Image(systemName: "gear")
                             .foregroundColor(AppTheme.accent)
@@ -77,6 +94,25 @@ struct TerminalView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            if let status = exportStatus {
+                Text(status)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(exportStatusIsError ? Color(hex: "#EE5555") : .green)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.cardBackground.opacity(0.95))
+                    .cornerRadius(8)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            withAnimation { exportStatus = nil }
+                        }
+                    }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: exportStatus)
         .onAppear {
             autoConnect()
         }
@@ -154,6 +190,53 @@ struct TerminalView: View {
             connectSSH()
         }
     }
+
+    private func exportToGoogleDocs() {
+        guard let tv = terminalViewRef else {
+            exportStatusIsError = true
+            exportStatus = "No terminal view"
+            return
+        }
+
+        isExporting = true
+        let data = tv.getTerminal().getBufferAsData()
+        let text = String(data: data, encoding: .utf8) ?? ""
+
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            isExporting = false
+            exportStatusIsError = true
+            exportStatus = "Nothing to export"
+            return
+        }
+
+        Task {
+            do {
+                let result = try await HTTPClient.post(
+                    path: "/terminal-to-doc",
+                    body: ["text": text],
+                    connection: server
+                )
+                isExporting = false
+                if let docURL = result["doc_url"] as? String {
+                    exportStatusIsError = false
+                    exportStatus = "Exported to Google Docs"
+                    if let url = URL(string: docURL) {
+                        UIApplication.shared.open(url)
+                    }
+                } else if let error = result["error"] as? String {
+                    exportStatusIsError = true
+                    exportStatus = error
+                } else {
+                    exportStatusIsError = false
+                    exportStatus = "Exported"
+                }
+            } catch {
+                isExporting = false
+                exportStatusIsError = true
+                exportStatus = "Export failed: \(error.localizedDescription)"
+            }
+        }
+    }
 }
 
 // MARK: - SwiftTerm UIViewRepresentable
@@ -166,6 +249,7 @@ typealias STTerminalView = SwiftTerm.TerminalView
 struct SwiftTermContainer: UIViewRepresentable {
     @ObservedObject var ssh: SSHTerminalService
     @Binding var terminalTitle: String
+    @Binding var terminalViewRef: STTerminalView?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(ssh: ssh, titleBinding: $terminalTitle)
@@ -191,6 +275,11 @@ struct SwiftTermContainer: UIViewRepresentable {
         ssh.onDataReceived = { data in
             let bytes = [UInt8](data)
             tv.feed(byteArray: bytes[...])
+        }
+
+        // Store ref for export
+        DispatchQueue.main.async {
+            terminalViewRef = tv
         }
 
         // Bring up keyboard
