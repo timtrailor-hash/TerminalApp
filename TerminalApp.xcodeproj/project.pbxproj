@@ -25,6 +25,7 @@
 		TA000002000003 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		TA000002000004 /* SSHTerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTerminalService.swift; sourceTree = "<group>"; };
 		TA000002000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		TA000002000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -59,6 +60,7 @@
 				TA000005000003 /* Services */,
 				TA000005000004 /* Views */,
 				TA000002000005 /* Assets.xcassets */,
+				TA000002000006 /* Info.plist */,
 			);
 			path = TerminalApp;
 			sourceTree = "<group>";
@@ -311,6 +313,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TerminalApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Terminal;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Mac Mini via SSH on the local network";
@@ -337,6 +340,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TerminalApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Terminal;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Mac Mini via SSH on the local network";
