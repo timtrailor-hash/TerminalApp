@@ -136,7 +136,9 @@ struct TerminalView: View {
                     }
                     .disabled(!ssh.isConnected || isExporting)
 
-                    NavigationLink(destination: SessionLogsView()) {
+                    NavigationLink(destination: SessionLogsView(onResume: { cmd in
+                        ssh.sendString(cmd)
+                    })) {
                         Image(systemName: "clock.arrow.circlepath")
                             .foregroundColor(AppTheme.accent)
                     }
