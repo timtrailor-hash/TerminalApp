@@ -429,10 +429,31 @@ struct TerminalView: View {
                 body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
                 request.httpBody = body
 
-                if let (data, _) = try? await URLSession.shared.data(for: request),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let path = json["path"] as? String {
-                    uploadedPaths.append(path)
+                do {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if statusCode >= 400 {
+                        let errorMsg = extractErrorMessage(from: data) ?? "HTTP \(statusCode)"
+                        await MainActor.run {
+                            exportStatusIsError = true
+                            exportStatus = "Upload error: \(errorMsg)"
+                        }
+                        continue
+                    }
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let path = json["path"] as? String {
+                        uploadedPaths.append(path)
+                    } else {
+                        await MainActor.run {
+                            exportStatusIsError = true
+                            exportStatus = "Upload failed: unexpected response"
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        exportStatusIsError = true
+                        exportStatus = "Upload failed: \(error.localizedDescription)"
+                    }
                 }
             }
 
@@ -486,6 +507,11 @@ struct TerminalView: View {
         }
     }
 
+    private func extractErrorMessage(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["error"] as? String ?? json["message"] as? String
+    }
+
     // MARK: - Export
 
     private func exportToGoogleDocs() {
@@ -531,9 +557,9 @@ struct TerminalView: View {
 
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard statusCode < 400 else {
-                    let body = String(data: data, encoding: .utf8) ?? ""
+                    let errorMsg = extractErrorMessage(from: data) ?? "Server error \(statusCode)"
                     exportStatusIsError = true
-                    exportStatus = "Server error \(statusCode): \(body.prefix(100))"
+                    exportStatus = errorMsg
                     return
                 }
 
