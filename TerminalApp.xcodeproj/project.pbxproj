@@ -18,6 +18,7 @@
 		TA000001000008 /* NIOSSH in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000003 /* NIOSSH */; };
 		TA000001000009 /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000004 /* NIOCore */; };
 		TA000001000010 /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000005 /* NIOPosix */; };
+		TAUIT0000000001 /* TerminalAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TAUIT0000000002 /* TerminalAppUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,8 @@
 		TA000002000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		TA000002000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		TAUIT0000000002 /* TerminalAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TerminalAppUITests.swift; path = TerminalAppUITests/TerminalAppUITests.swift; sourceTree = SOURCE_ROOT; };
+		TAUIT0000000003 /* TerminalAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TerminalAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +48,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+		TAUIT0000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TAUIT0000000001 /* TerminalAppUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TAUIT0000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TAUIT0000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
 
 /* Begin PBXGroup section */
 		TA000005000001 = {
@@ -52,6 +78,7 @@
 			children = (
 				TA000005000002 /* TerminalApp */,
 				TA000005000005 /* Products */,
+							TAUIT0000000004 /* TerminalAppUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -89,11 +116,28 @@
 			isa = PBXGroup;
 			children = (
 				TA000003000001 /* TerminalApp.app */,
+							TAUIT0000000003 /* TerminalAppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
+		TAUIT0000000004 /* TerminalAppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				TAUIT0000000002 /* TerminalAppUITests.swift */,
+			);
+			name = TerminalAppUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
+
+/* Begin PBXTargetDependency section */
+		TAUIT0000000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = TA000006000001 /* TerminalApp */;
+			targetProxy = TAUIT0000000013 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXNativeTarget section */
 		TA000006000001 /* TerminalApp */ = {
@@ -120,7 +164,35 @@
 			productReference = TA000003000001 /* TerminalApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		TAUIT0000000008 /* TerminalAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TAUIT0000000009 /* Build configuration list for PBXNativeTarget "TerminalAppUITests" */;
+			buildPhases = (
+				TAUIT0000000005 /* Sources */,
+				TAUIT0000000006 /* Frameworks */,
+				TAUIT0000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TAUIT0000000012 /* PBXTargetDependency */,
+			);
+			name = TerminalAppUITests;
+			productName = TerminalAppUITests;
+			productReference = TAUIT0000000003 /* TerminalAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		TAUIT0000000013 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = TA000009000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = TA000006000001;
+			remoteInfo = TerminalApp;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		TA000009000001 /* Project object */ = {
@@ -130,6 +202,10 @@
 				LastSwiftUpdateCheck = 1540;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					TAUIT0000000008 = {
+						CreatedOnToolsVersion = 15.4;
+						TestTargetID = TA000006000001;
+					};
 					TA000006000001 = {
 						CreatedOnToolsVersion = 15.4;
 					};
@@ -155,6 +231,7 @@
 			projectRoot = "";
 			targets = (
 				TA000006000001 /* TerminalApp */,
+				TAUIT0000000008 /* TerminalAppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -363,6 +440,38 @@
 			};
 			name = Release;
 		};
+		TAUIT0000000010 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NNCBP8YD5S;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.timtrailor.terminal.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TerminalApp;
+							GENERATE_INFOPLIST_FILE = YES;
+			};
+			name = Debug;
+		};
+		TAUIT0000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NNCBP8YD5S;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.timtrailor.terminal.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TerminalApp;
+							GENERATE_INFOPLIST_FILE = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -380,6 +489,15 @@
 			buildConfigurations = (
 				TA00000A000003 /* Debug */,
 				TA00000A000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		TAUIT0000000009 /* Build configuration list for PBXNativeTarget "TerminalAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TAUIT0000000010 /* Debug */,
+				TAUIT0000000011 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
