@@ -103,7 +103,7 @@ private final class ShellChannelHandler: ChannelInboundHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let payload = unwrapInboundIn(data)
 
-        guard case .byteBuffer(var buffer) = payload.data else { return }
+        guard case .byteBuffer(let buffer) = payload.data else { return }
         guard let bytes = buffer.readBytes(length: buffer.readableBytes), !bytes.isEmpty else { return }
 
         onData(Data(bytes))
