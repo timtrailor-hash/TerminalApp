@@ -169,99 +169,102 @@ struct TerminalView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if !pendingFiles.isEmpty {
-                VStack(spacing: 0) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(pendingFiles) { file in
-                                ZStack(alignment: .topTrailing) {
-                                    if file.isFile {
-                                        VStack(spacing: 2) {
-                                            Image(systemName: fileIcon(for: file.filename))
-                                                .font(.system(size: 24))
-                                                .foregroundColor(AppTheme.accent)
-                                            Text(file.filename)
-                                                .font(.system(size: 8))
-                                                .foregroundColor(AppTheme.bodyText)
-                                                .lineLimit(2)
-                                                .multilineTextAlignment(.center)
-                                        }
-                                        .frame(width: 60, height: 60)
-                                        .background(AppTheme.cardBackground)
-                                        .cornerRadius(8)
-                                    } else {
-                                        Image(uiImage: file.thumbnail)
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fill)
-                                            .frame(width: 60, height: 60)
-                                            .cornerRadius(8)
-                                            .clipped()
-                                    }
+            VStack(spacing: 0) {
+                // Export/upload status toast — sits above the pending files bar
+                if let status = exportStatus {
+                    Text(status)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(exportStatusIsError ? Color(hex: "#EE5555") : .green)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.cardBackground.opacity(0.95))
+                        .cornerRadius(8)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                withAnimation { exportStatus = nil }
+                            }
+                        }
+                }
 
-                                    Button {
-                                        pendingFiles.removeAll { $0.id == file.id }
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.white)
-                                            .background(Circle().fill(Color.black.opacity(0.6)))
+                // Pending files bar
+                if !pendingFiles.isEmpty {
+                    VStack(spacing: 0) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(pendingFiles) { file in
+                                    ZStack(alignment: .topTrailing) {
+                                        if file.isFile {
+                                            VStack(spacing: 2) {
+                                                Image(systemName: fileIcon(for: file.filename))
+                                                    .font(.system(size: 24))
+                                                    .foregroundColor(AppTheme.accent)
+                                                Text(file.filename)
+                                                    .font(.system(size: 8))
+                                                    .foregroundColor(AppTheme.bodyText)
+                                                    .lineLimit(2)
+                                                    .multilineTextAlignment(.center)
+                                            }
+                                            .frame(width: 60, height: 60)
+                                            .background(AppTheme.cardBackground)
+                                            .cornerRadius(8)
+                                        } else {
+                                            Image(uiImage: file.thumbnail)
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                                .frame(width: 60, height: 60)
+                                                .cornerRadius(8)
+                                                .clipped()
+                                        }
+
+                                        Button {
+                                            pendingFiles.removeAll { $0.id == file.id }
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.system(size: 18))
+                                                .foregroundColor(.white)
+                                                .background(Circle().fill(Color.black.opacity(0.6)))
+                                        }
+                                        .offset(x: 4, y: -4)
                                     }
-                                    .offset(x: 4, y: -4)
                                 }
                             }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                    }
 
-                    Button {
-                        uploadPendingFiles()
-                    } label: {
-                        HStack {
-                            if isUploading {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(AppTheme.background)
-                                Text("Uploading...")
-                            } else {
-                                Image(systemName: "arrow.up.circle.fill")
-                                Text("Upload \(pendingFiles.count) file\(pendingFiles.count == 1 ? "" : "s")")
+                        Button {
+                            uploadPendingFiles()
+                        } label: {
+                            HStack {
+                                if isUploading {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                        .tint(AppTheme.background)
+                                    Text("Uploading...")
+                                } else {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                    Text("Upload \(pendingFiles.count) file\(pendingFiles.count == 1 ? "" : "s")")
+                                }
                             }
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(AppTheme.background)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(AppTheme.accent)
+                            .cornerRadius(10)
                         }
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(AppTheme.background)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(AppTheme.accent)
-                        .cornerRadius(10)
+                        .disabled(isUploading)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
                     }
-                    .disabled(isUploading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                    .background(AppTheme.cardBackground.opacity(0.95))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .background(AppTheme.cardBackground.opacity(0.95))
-                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: pendingFiles.isEmpty)
-        .overlay(alignment: .bottom) {
-            if let status = exportStatus {
-                Text(status)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(exportStatusIsError ? Color(hex: "#EE5555") : .green)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(AppTheme.cardBackground.opacity(0.95))
-                    .cornerRadius(8)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                            withAnimation { exportStatus = nil }
-                        }
-                    }
-            }
-        }
         .animation(.easeInOut(duration: 0.2), value: exportStatus)
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotos, maxSelectionCount: 5, matching: .images)
         .onChange(of: selectedPhotos) { _, newItems in
@@ -462,9 +465,11 @@ struct TerminalView: View {
                 pendingFiles = []
 
                 if !uploadedPaths.isEmpty {
-                    // Paste file paths into terminal so user can reference them
+                    // Paste file paths into the terminal input WITHOUT pressing enter.
+                    // The user can then type their message after the paths and submit together.
+                    // Claude Code will see the paths inline and read the files.
                     let pathsText = uploadedPaths.joined(separator: " ")
-                    ssh.sendString("# Uploaded: \(pathsText)\n")
+                    ssh.sendString(pathsText + " ")
 
                     exportStatusIsError = false
                     let fileWord = uploadedPaths.count == 1 ? "file" : "files"
