@@ -103,7 +103,7 @@ private final class ShellChannelHandler: ChannelInboundHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let payload = unwrapInboundIn(data)
 
-        guard case .byteBuffer(let buffer) = payload.data else { return }
+        guard case .byteBuffer(var buffer) = payload.data else { return }
         guard let bytes = buffer.readBytes(length: buffer.readableBytes), !bytes.isEmpty else { return }
 
         onData(Data(bytes))
@@ -279,7 +279,7 @@ private final class SSHConnection {
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
             // Send empty ignore data — keeps the connection alive without affecting the shell
-            var buffer = sc.allocator.buffer(capacity: 0)
+            let buffer = sc.allocator.buffer(capacity: 0)
             // Write nothing — just flush to keep TCP alive
             sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
         }

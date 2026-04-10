@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var server: ServerConnection
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
     @AppStorage("sshPassword") private var sshPassword = ""
+    @AppStorage("useSplitView") private var useSplitView = true
 
     var body: some View {
         Form {
@@ -44,6 +45,14 @@ struct SettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .font(.system(.body, design: .monospaced))
                 }
+            }
+
+            Section("Display") {
+                Toggle("Split View", isOn: $useSplitView)
+                    .tint(AppTheme.accent)
+                Text("Scrollable output + input box. Disable for classic terminal.")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.fadedText)
             }
 
             Section("About") {

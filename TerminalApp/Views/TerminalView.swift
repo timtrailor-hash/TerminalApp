@@ -7,16 +7,33 @@ import os
 
 private let termLog = Logger(subsystem: "com.timtrailor.terminal", category: "terminalView")
 
+
+struct TmuxWindow: Identifiable, Equatable {
+    let index: Int
+    let name: String
+    let active: Bool
+    var id: Int { index }
+}
+
 /// Native SSH terminal using SwiftTerm + NIOSSH.
 struct TerminalView: View {
     @EnvironmentObject var server: ServerConnection
     @StateObject private var ssh = SSHTerminalService()
+    @StateObject private var commandRunner = SSHCommandRunner()
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
     @AppStorage("sshPassword") private var sshPassword = ""
+    @AppStorage("useSplitView") private var useSplitView = true
 
     @State private var terminalTitle = "Terminal"
+    @State private var lastCapturedText = ""
+    @State private var activeWindowIndex: Int = 1
+    @State private var hasSyncedInitialWindow = false
+
+    // Tmux window tabs
+    @State private var tmuxWindows: [TmuxWindow] = []
+    @State private var tmuxPollTimer: Timer?
     @State private var isExporting = false
     @State private var exportStatus: String?
     @State private var exportStatusIsError = false
@@ -51,15 +68,31 @@ struct TerminalView: View {
     }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
+        VStack(spacing: 0) {
+            // Tmux window tab bar
+            if ssh.isConnected && !tmuxWindows.isEmpty {
+                tmuxTabBar
+            }
 
-            if ssh.isConnected {
-                SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle, terminalViewRef: $terminalViewRef)
-            } else if ssh.isConnecting {
-                connectingView
-            } else {
-                disconnectedView
+            ZStack {
+                AppTheme.background.ignoresSafeArea()
+
+                if ssh.isConnected {
+                    if useSplitView {
+                        SplitTerminalView(
+                            commandRunner: commandRunner,
+                            ssh: ssh,
+                            activeWindowIndex: activeWindowIndex,
+                            onCapturedText: { lastCapturedText = $0 }
+                        )
+                    } else {
+                        SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle, terminalViewRef: $terminalViewRef)
+                    }
+                } else if ssh.isConnecting {
+                    connectingView
+                } else {
+                    disconnectedView
+                }
             }
         }
         .navigationTitle(terminalTitle)
@@ -67,20 +100,8 @@ struct TerminalView: View {
         .toolbarBackground(AppTheme.cardBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 14) {
-                    Button {
-                        ssh.sendString("tmux new-window\n")
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus.rectangle")
-                            Text("New")
-                                .font(.system(size: 13))
-                        }
-                        .foregroundColor(AppTheme.accent)
-                    }
-                    .disabled(!ssh.isConnected)
-
                     Menu {
                         Button {
                             showCamera = true
@@ -119,10 +140,7 @@ struct TerminalView: View {
                             }
                         }
                     }
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 14) {
+
                     Button {
                         exportToGoogleDocs()
                     } label: {
@@ -148,23 +166,6 @@ struct TerminalView: View {
                             .foregroundColor(AppTheme.accent)
                     }
 
-                    Button {
-                        reconnect()
-                    } label: {
-                        Image(systemName: "arrow.trianglehead.2.counterclockwise")
-                            .foregroundColor(AppTheme.accent)
-                    }
-
-                    Button {
-                        if ssh.isConnected {
-                            ssh.disconnect()
-                        } else {
-                            connectSSH()
-                        }
-                    } label: {
-                        Image(systemName: ssh.isConnected ? "wifi.slash" : "wifi")
-                            .foregroundColor(AppTheme.accent)
-                    }
                 }
             }
         }
@@ -290,6 +291,168 @@ struct TerminalView: View {
                 autoConnect()
             }
         }
+        .onChange(of: ssh.isConnected) { _, connected in
+            if connected {
+                // Start polling tmux windows after a short delay for tmux to be ready
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { startTmuxPolling() }
+            } else {
+                stopTmuxPolling()
+            }
+        }
+        .onDisappear {
+            stopTmuxPolling()
+        }
+    }
+
+
+    // MARK: - Tmux Tab Bar
+
+    private var tmuxTabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(tmuxWindows) { window in
+                    Button {
+                        selectTmuxWindow(index: window.index)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\(window.index)")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(window.active ? AppTheme.background : AppTheme.accent.opacity(0.6))
+                            Text(window.name)
+                                .font(.system(size: 12, weight: window.active ? .semibold : .regular, design: .monospaced))
+                                .foregroundColor(window.active ? AppTheme.background : .white.opacity(0.8))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(window.active ? AppTheme.accent : AppTheme.cardBackground)
+                        )
+                    }
+                    .contextMenu {
+                        Button {
+                            selectTmuxWindow(index: window.index)
+                        } label: {
+                            Label("Switch to", systemImage: "arrow.right.circle")
+                        }
+                        Button(role: .destructive) {
+                            closeTmuxWindow(index: window.index)
+                        } label: {
+                            Label("Close", systemImage: "xmark.circle")
+                        }
+                    }
+                }
+
+                // New window button
+                Button {
+                    createTmuxWindow()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.accent.opacity(0.6))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(AppTheme.cardBackground)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(AppTheme.accent.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .background(AppTheme.background)
+    }
+
+    private func createTmuxWindow() {
+        guard let url = URL(string: "\(server.baseURL)/tmux-new-window") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = "{}".data(using: .utf8)
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { pollTmuxWindows() }
+        }.resume()
+    }
+
+    private func closeTmuxWindow(index: Int) {
+        // If this is the last window, create a new one first so tmux stays alive
+        if tmuxWindows.count <= 1 {
+            createTmuxWindow()
+            // Wait for new window to exist, then kill the old one
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                killTmuxWindow(index: index)
+            }
+        } else {
+            killTmuxWindow(index: index)
+        }
+    }
+
+    private func killTmuxWindow(index: Int) {
+        guard let url = URL(string: "\(server.baseURL)/tmux-kill-window") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["index": index])
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { pollTmuxWindows() }
+        }.resume()
+    }
+
+    private func selectTmuxWindow(index: Int) {
+        // Update local state immediately so SplitTerminalView targets the right window
+        activeWindowIndex = index
+
+        guard let url = URL(string: "\(server.baseURL)/tmux-select-window") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["index": index])
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { pollTmuxWindows() }
+        }.resume()
+    }
+
+    private func pollTmuxWindows() {
+        guard ssh.isConnected,
+              let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let windowsArr = json["windows"] as? [[String: Any]] else { return }
+            let windows = windowsArr.compactMap { w -> TmuxWindow? in
+                guard let index = w["index"] as? Int,
+                      let name = w["name"] as? String,
+                      let active = w["active"] as? Bool else { return nil }
+                return TmuxWindow(index: index, name: name, active: active)
+            }
+            DispatchQueue.main.async {
+                tmuxWindows = windows
+                // On first load, sync active window from tmux's perspective
+                if !hasSyncedInitialWindow, let active = windows.first(where: { $0.active }) {
+                    activeWindowIndex = active.index
+                    hasSyncedInitialWindow = true
+                }
+            }
+        }.resume()
+    }
+
+    private func startTmuxPolling() {
+        tmuxPollTimer?.invalidate()
+        tmuxPollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            pollTmuxWindows()
+        }
+        pollTmuxWindows() // immediate first poll
+    }
+
+    private func stopTmuxPolling() {
+        tmuxPollTimer?.invalidate()
+        tmuxPollTimer = nil
+        tmuxWindows = []
     }
 
     // MARK: - Sub-views
@@ -344,6 +507,20 @@ struct TerminalView: View {
         guard !sshPassword.isEmpty else { return }
         Task {
             await ssh.connect(host: serverIP, username: sshUsername, password: sshPassword)
+            // Auto-start tmux so tab bar and session persistence work
+            // -A: attach if session exists, -s mobile: named session
+            try? await Task.sleep(nanoseconds: 500_000_000) // wait for shell prompt
+            ssh.sendString("tmux new-session -A -s mobile\n")
+
+            // Connect command runner (second SSH connection for tmux commands)
+            if useSplitView {
+                await commandRunner.connect(host: serverIP, username: sshUsername, password: sshPassword)
+            }
+
+            // Re-register APNs device token with server (in case server restarted)
+            if let token = UserDefaults.standard.string(forKey: "apnsDeviceToken") {
+                registerDeviceToken(token)
+            }
         }
     }
 
@@ -352,6 +529,18 @@ struct TerminalView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             connectSSH()
         }
+    }
+
+    private func registerDeviceToken(_ token: String) {
+        guard let url = URL(string: "\(server.baseURL)/register-device") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !server.authToken.isEmpty {
+            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["device_token": token])
+        URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
     }
 
     private func autoConnect() {
@@ -469,7 +658,22 @@ struct TerminalView: View {
                     // The user can then type their message after the paths and submit together.
                     // Claude Code will see the paths inline and read the files.
                     let pathsText = uploadedPaths.joined(separator: " ")
-                    ssh.sendString(pathsText + " ")
+                    if useSplitView {
+                        // Use HTTP endpoint to inject paths into the active tmux window
+                        let window = activeWindowIndex
+                        if let url = URL(string: "\(server.baseURL)/tmux-send-text") {
+                            var req = URLRequest(url: url)
+                            req.httpMethod = "POST"
+                            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                            if !server.authToken.isEmpty {
+                                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+                            }
+                            req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": pathsText + " ", "window": window])
+                            URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+                        }
+                    } else {
+                        ssh.sendString(pathsText + " ")
+                    }
 
                     exportStatusIsError = false
                     let fileWord = uploadedPaths.count == 1 ? "file" : "files"
@@ -520,15 +724,20 @@ struct TerminalView: View {
     // MARK: - Export
 
     private func exportToGoogleDocs() {
-        guard let tv = terminalViewRef else {
-            exportStatusIsError = true
-            exportStatus = "No terminal view"
-            return
-        }
-
         isExporting = true
-        let data = tv.getTerminal().getBufferAsData()
-        let text = String(data: data, encoding: .utf8) ?? ""
+        let text: String
+        if useSplitView {
+            text = lastCapturedText
+        } else {
+            guard let tv = terminalViewRef else {
+                isExporting = false
+                exportStatusIsError = true
+                exportStatus = "No terminal view"
+                return
+            }
+            let data = tv.getTerminal().getBufferAsData()
+            text = String(data: data, encoding: .utf8) ?? ""
+        }
 
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             isExporting = false
