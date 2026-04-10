@@ -102,6 +102,13 @@ struct TerminalView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 14) {
+                    Button {
+                        hardResetTmux()
+                    } label: {
+                        Image(systemName: "exclamationmark.arrow.circlepath")
+                            .foregroundColor(AppTheme.accent)
+                    }
+
                     Menu {
                         Button {
                             showCamera = true
@@ -400,6 +407,24 @@ struct TerminalView: View {
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["index": index])
         URLSession.shared.dataTask(with: request) { _, _, _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { pollTmuxWindows() }
+        }.resume()
+    }
+
+    private func hardResetTmux() {
+        guard let url = URL(string: "\(server.baseURL)/tmux-reset") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = "{}".data(using: .utf8)
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.async {
+                // Reset UI state and immediately poll the new session
+                tmuxWindows = []
+                activeWindowIndex = 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    pollTmuxWindows()
+                }
+            }
         }.resume()
     }
 
