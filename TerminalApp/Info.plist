@@ -11,5 +11,9 @@
 	<string>Take photos to upload to the server</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Select photos to upload to the server</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 </dict>
 </plist>

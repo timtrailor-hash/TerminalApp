@@ -7,28 +7,65 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0F49A774898045E1B1179EBE /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8289B7F67CB539C50E6FBC8 /* WidgetKit.framework */; };
+		28B52F81184F57291F14047A /* ClaudeLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A461703FFFE9F7CA49FA67B2 /* ClaudeLiveActivity.swift */; };
+		2CF18A527B47373806AB9F0B /* ActivityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7E8BF6A7EB200358DE15696A /* ActivityKit.framework */; };
+		6825FC12A70BFE99D16F89C6 /* TerminalActivityWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 66F7E7EC3B72669C07EAC8E5 /* TerminalActivityWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		86D4BA124BA3A4D1B7803409 /* TerminalActivityWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBBDD64DEF01DE7BE893218 /* TerminalActivityWidgetBundle.swift */; };
+		91DC6CAF41899E2D394847FC /* ClaudeActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C6F4816DF7EF601C5905A6 /* ClaudeActivityAttributes.swift */; };
+		B000B016399FB756EEF492D9 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA80679288CCEA790686F8CC /* SwiftUI.framework */; };
+		CF8EA68EAE091B02F13E2767 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 31527F8F339EE564516A6469 /* Foundation.framework */; };
+		E8BA45F9A31B49C6B63A75EC /* ClaudeActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C6F4816DF7EF601C5905A6 /* ClaudeActivityAttributes.swift */; };
 		TA000001000001 /* TerminalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000001 /* TerminalApp.swift */; };
 		TA000001000002 /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000002 /* TerminalView.swift */; };
 		TA000001000003 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000003 /* SettingsView.swift */; };
 		TA000001000004 /* SSHTerminalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000004 /* SSHTerminalService.swift */; };
-		TA000001000011 /* SessionLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000007 /* SessionLogsView.swift */; };
 		TA000001000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = TA000002000005 /* Assets.xcassets */; };
 		TA000001000006 /* TimSharedKit in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000001 /* TimSharedKit */; };
 		TA000001000007 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000002 /* SwiftTerm */; };
 		TA000001000008 /* NIOSSH in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000003 /* NIOSSH */; };
 		TA000001000009 /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000004 /* NIOCore */; };
 		TA000001000010 /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = TA00000D000005 /* NIOPosix */; };
-		TAUIT0000000001 /* TerminalAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TAUIT0000000002 /* TerminalAppUITests.swift */; };
+		TA000001000011 /* SessionLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000007 /* SessionLogsView.swift */; };
 		TA000001000020 /* MoshTerminalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000020 /* MoshTerminalService.swift */; };
 		TA000001000021 /* MoshServerLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000021 /* MoshServerLauncher.swift */; };
-		TA000001000030 /* SplitTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000030 /* SplitTerminalView.swift */; };
-		TA000001000031 /* SSHCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000031 /* SSHCommandRunner.swift */; };
 		TA000001000022 /* mosh.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = TA000002000022 /* mosh.xcframework */; };
 		TA000001000023 /* Protobuf_C_.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = TA000002000023 /* Protobuf_C_.xcframework */; };
 		TA000001000025 /* Protobuf_C_.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = TA000002000023 /* Protobuf_C_.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		TA000001000030 /* SplitTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000030 /* SplitTerminalView.swift */; };
+		TA000001000031 /* SSHCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000031 /* SSHCommandRunner.swift */; };
+		TAUIT0000000001 /* TerminalAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TAUIT0000000002 /* TerminalAppUITests.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		61BE5C7726BABF97866FA092 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = TA000009000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CDFC5E7997D901E0FE421566;
+			remoteInfo = TerminalActivityWidget;
+		};
+		TAUIT0000000013 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = TA000009000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = TA000006000001;
+			remoteInfo = TerminalApp;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
+		CF0F765DA67B45D8D60A12A3 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				6825FC12A70BFE99D16F89C6 /* TerminalActivityWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		TA000004000020 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -43,16 +80,22 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1EBBDD64DEF01DE7BE893218 /* TerminalActivityWidgetBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerminalActivityWidgetBundle.swift; sourceTree = "<group>"; };
+		31527F8F339EE564516A6469 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		66F7E7EC3B72669C07EAC8E5 /* TerminalActivityWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TerminalActivityWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E8BF6A7EB200358DE15696A /* ActivityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ActivityKit.framework; path = System/Library/Frameworks/ActivityKit.framework; sourceTree = SDKROOT; };
+		9247D56209B368800F7FC653 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A461703FFFE9F7CA49FA67B2 /* ClaudeLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClaudeLiveActivity.swift; sourceTree = "<group>"; };
+		C8289B7F67CB539C50E6FBC8 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		D0C6F4816DF7EF601C5905A6 /* ClaudeActivityAttributes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClaudeActivityAttributes.swift; sourceTree = "<group>"; };
+		DA80679288CCEA790686F8CC /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		TA000002000001 /* TerminalApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalApp.swift; sourceTree = "<group>"; };
 		TA000002000002 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
 		TA000002000003 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		TA000002000004 /* SSHTerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTerminalService.swift; sourceTree = "<group>"; };
-		TA000002000007 /* SessionLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLogsView.swift; sourceTree = "<group>"; };
 		TA000002000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		TA000002000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		TAUIT0000000002 /* TerminalAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TerminalAppUITests.swift; path = TerminalAppUITests/TerminalAppUITests.swift; sourceTree = SOURCE_ROOT; };
-		TAUIT0000000003 /* TerminalAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TerminalAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		TA000002000007 /* SessionLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLogsView.swift; sourceTree = "<group>"; };
 		TA000002000020 /* MoshTerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoshTerminalService.swift; sourceTree = "<group>"; };
 		TA000002000021 /* MoshServerLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoshServerLauncher.swift; sourceTree = "<group>"; };
 		TA000002000022 /* mosh.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = mosh.xcframework; path = Frameworks/mosh.xcframework; sourceTree = SOURCE_ROOT; };
@@ -60,9 +103,23 @@
 		TA000002000030 /* SplitTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitTerminalView.swift; sourceTree = "<group>"; };
 		TA000002000031 /* SSHCommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCommandRunner.swift; sourceTree = "<group>"; };
 		TA000002000040 /* TerminalApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TerminalApp.entitlements; sourceTree = "<group>"; };
+		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		TAUIT0000000002 /* TerminalAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TerminalAppUITests.swift; path = TerminalAppUITests/TerminalAppUITests.swift; sourceTree = SOURCE_ROOT; };
+		TAUIT0000000003 /* TerminalAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TerminalAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		F07CF3CE3AD22834A170B5EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF8EA68EAE091B02F13E2767 /* Foundation.framework in Frameworks */,
+				2CF18A527B47373806AB9F0B /* ActivityKit.framework in Frameworks */,
+				0F49A774898045E1B1179EBE /* WidgetKit.framework in Frameworks */,
+				B000B016399FB756EEF492D9 /* SwiftUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		TA000004000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -77,15 +134,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXFrameworksBuildPhase section */
-		TAUIT0000000005 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				TAUIT0000000001 /* TerminalAppUITests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		TAUIT0000000006 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -93,23 +141,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		TAUIT0000000007 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		D05DD2512019725FADEB7A30 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				31527F8F339EE564516A6469 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		E97C037BF29937B84F13567C /* TerminalActivityWidget */ = {
+			isa = PBXGroup;
+			children = (
+				1EBBDD64DEF01DE7BE893218 /* TerminalActivityWidgetBundle.swift */,
+				A461703FFFE9F7CA49FA67B2 /* ClaudeLiveActivity.swift */,
+				9247D56209B368800F7FC653 /* Info.plist */,
+			);
+			name = TerminalActivityWidget;
+			path = TerminalActivityWidget;
+			sourceTree = "<group>";
+		};
 		TA000005000001 = {
 			isa = PBXGroup;
 			children = (
 				TA000005000002 /* TerminalApp */,
 				TA000005000020 /* Frameworks */,
 				TA000005000005 /* Products */,
-							TAUIT0000000004 /* TerminalAppUITests */,
+				TAUIT0000000004 /* TerminalAppUITests */,
+				E97C037BF29937B84F13567C /* TerminalActivityWidget */,
 			);
 			sourceTree = "<group>";
 		};
@@ -122,6 +183,7 @@
 				TA000002000005 /* Assets.xcassets */,
 				TA000002000006 /* Info.plist */,
 				TA000002000040 /* TerminalApp.entitlements */,
+				D0C6F4816DF7EF601C5905A6 /* ClaudeActivityAttributes.swift */,
 			);
 			path = TerminalApp;
 			sourceTree = "<group>";
@@ -152,9 +214,23 @@
 			isa = PBXGroup;
 			children = (
 				TA000003000001 /* TerminalApp.app */,
-							TAUIT0000000003 /* TerminalAppUITests.xctest */,
+				TAUIT0000000003 /* TerminalAppUITests.xctest */,
+				66F7E7EC3B72669C07EAC8E5 /* TerminalActivityWidget.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		TA000005000020 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				TA000002000022 /* mosh.xcframework */,
+				TA000002000023 /* Protobuf_C_.xcframework */,
+				D05DD2512019725FADEB7A30 /* iOS */,
+				7E8BF6A7EB200358DE15696A /* ActivityKit.framework */,
+				C8289B7F67CB539C50E6FBC8 /* WidgetKit.framework */,
+				DA80679288CCEA790686F8CC /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		TAUIT0000000004 /* TerminalAppUITests */ = {
@@ -165,26 +241,26 @@
 			name = TerminalAppUITests;
 			sourceTree = "<group>";
 		};
-		TA000005000020 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				TA000002000022 /* mosh.xcframework */,
-				TA000002000023 /* Protobuf_C_.xcframework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
-/* Begin PBXTargetDependency section */
-		TAUIT0000000012 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = TA000006000001 /* TerminalApp */;
-			targetProxy = TAUIT0000000013 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
 /* Begin PBXNativeTarget section */
+		CDFC5E7997D901E0FE421566 /* TerminalActivityWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6C845F48AB5D1210E8B24355 /* Build configuration list for PBXNativeTarget "TerminalActivityWidget" */;
+			buildPhases = (
+				F674B4153C3E58CDA7BF1E7F /* Sources */,
+				F07CF3CE3AD22834A170B5EA /* Frameworks */,
+				FCA42ABA456B4E49CC45E462 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TerminalActivityWidget;
+			productName = TerminalActivityWidget;
+			productReference = 66F7E7EC3B72669C07EAC8E5 /* TerminalActivityWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		TA000006000001 /* TerminalApp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = TA000008000003 /* Build configuration list for PBXNativeTarget "TerminalApp" */;
@@ -193,10 +269,12 @@
 				TA000004000001 /* Frameworks */,
 				TA000004000020 /* Embed Frameworks */,
 				TA000007000002 /* Resources */,
+				CF0F765DA67B45D8D60A12A3 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				6F652C9CA99BE109374C622C /* PBXTargetDependency */,
 			);
 			name = TerminalApp;
 			packageProductDependencies = (
@@ -230,16 +308,6 @@
 		};
 /* End PBXNativeTarget section */
 
-/* Begin PBXContainerItemProxy section */
-		TAUIT0000000013 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = TA000009000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = TA000006000001;
-			remoteInfo = TerminalApp;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXProject section */
 		TA000009000001 /* Project object */ = {
 			isa = PBXProject;
@@ -248,12 +316,12 @@
 				LastSwiftUpdateCheck = 1540;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					TA000006000001 = {
+						CreatedOnToolsVersion = 15.4;
+					};
 					TAUIT0000000008 = {
 						CreatedOnToolsVersion = 15.4;
 						TestTargetID = TA000006000001;
-					};
-					TA000006000001 = {
-						CreatedOnToolsVersion = 15.4;
 					};
 				};
 			};
@@ -278,11 +346,19 @@
 			targets = (
 				TA000006000001 /* TerminalApp */,
 				TAUIT0000000008 /* TerminalAppUITests */,
+				CDFC5E7997D901E0FE421566 /* TerminalActivityWidget */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		FCA42ABA456B4E49CC45E462 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		TA000007000002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -291,9 +367,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		TAUIT0000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		F674B4153C3E58CDA7BF1E7F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				86D4BA124BA3A4D1B7803409 /* TerminalActivityWidgetBundle.swift in Sources */,
+				28B52F81184F57291F14047A /* ClaudeLiveActivity.swift in Sources */,
+				E8BA45F9A31B49C6B63A75EC /* ClaudeActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		TA000007000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -307,12 +400,92 @@
 				TA000001000021 /* MoshServerLauncher.swift in Sources */,
 				TA000001000030 /* SplitTerminalView.swift in Sources */,
 				TA000001000031 /* SSHCommandRunner.swift in Sources */,
+				91DC6CAF41899E2D394847FC /* ClaudeActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TAUIT0000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TAUIT0000000001 /* TerminalAppUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		6F652C9CA99BE109374C622C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = TerminalActivityWidget;
+			target = CDFC5E7997D901E0FE421566 /* TerminalActivityWidget */;
+			targetProxy = 61BE5C7726BABF97866FA092 /* PBXContainerItemProxy */;
+		};
+		TAUIT0000000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = TA000006000001 /* TerminalApp */;
+			targetProxy = TAUIT0000000013 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		424637B8D1C7F2DE930BD4DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NNCBP8YD5S;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TerminalActivityWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TerminalActivityWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal.activitywidget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E42206D4811BCC04AE83B9C9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NNCBP8YD5S;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TerminalActivityWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TerminalActivityWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal.activitywidget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		TA00000A000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -448,10 +621,6 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TerminalApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Terminal;
@@ -462,15 +631,19 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleLightContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
 				OTHER_LDFLAGS = (
 					"-lz",
 					"-lc++",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -488,10 +661,6 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TerminalApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Terminal;
@@ -502,15 +671,19 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleLightContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
 				OTHER_LDFLAGS = (
 					"-lz",
 					"-lc++",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -522,21 +695,21 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = NNCBP8YD5S;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.timtrailor.terminal.uitests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = TerminalApp;
-							FRAMEWORK_SEARCH_PATHS = (
+				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TerminalApp;
 			};
 			name = Debug;
 		};
@@ -546,27 +719,36 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = NNCBP8YD5S;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.timtrailor.terminal.uitests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = TerminalApp;
-							FRAMEWORK_SEARCH_PATHS = (
+				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timtrailor.terminal.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TerminalApp;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		6C845F48AB5D1210E8B24355 /* Build configuration list for PBXNativeTarget "TerminalActivityWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				424637B8D1C7F2DE930BD4DA /* Release */,
+				E42206D4811BCC04AE83B9C9 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		TA000008000001 /* Build configuration list for PBXProject "TerminalApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
