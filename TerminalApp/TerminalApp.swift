@@ -3,6 +3,16 @@ import SwiftUI
 import TimSharedKit
 import UserNotifications
 
+extension Notification.Name {
+    /// Posted when an APNs push (alert tap OR silent background) asks the
+    /// UI to refresh a specific tmux window's pane capture. userInfo
+    /// carries "window": Int.
+    static let paneRefreshRequested = Notification.Name("paneRefreshRequested")
+    /// Posted when the user taps a notification. The UI should switch to
+    /// the named tab. userInfo carries "window": Int.
+    static let deepLinkToWindow = Notification.Name("deepLinkToWindow")
+}
+
 @main
 struct TerminalApp: App {
     @StateObject private var server = ServerConnection()
@@ -40,7 +50,39 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 }
             }
         }
+
+        // Cold-launch via notification tap: seed the deep-link so the root
+        // view routes to the right tab once the scene is ready.
+        if let remote = launchOptions?[.remoteNotification] as? [AnyHashable: Any],
+           let window = AppDelegate.windowIndex(from: remote) {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .deepLinkToWindow,
+                                                object: nil,
+                                                userInfo: ["window": window])
+            }
+        }
         return true
+    }
+
+    /// Silent content-available push → wake up and ask the pane view to
+    /// pre-fetch the fresh capture before the user foregrounds the app.
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        if let window = AppDelegate.windowIndex(from: userInfo) {
+            NotificationCenter.default.post(name: .paneRefreshRequested,
+                                            object: nil,
+                                            userInfo: ["window": window])
+            completionHandler(.newData)
+        } else {
+            completionHandler(.noData)
+        }
+    }
+
+    static func windowIndex(from userInfo: [AnyHashable: Any]) -> Int? {
+        if let w = userInfo["window"] as? Int { return w }
+        if let s = userInfo["window"] as? String, let w = Int(s) { return w }
+        return nil
     }
 
     func application(_ application: UIApplication,
@@ -79,7 +121,31 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Even for foreground alerts, kick a pane refresh for the target
+        // tab so the user sees Claude's reply without switching away.
+        let info = notification.request.content.userInfo
+        if let window = AppDelegate.windowIndex(from: info) {
+            NotificationCenter.default.post(name: .paneRefreshRequested,
+                                            object: nil,
+                                            userInfo: ["window": window])
+        }
         completionHandler([.banner, .sound])
+    }
+
+    // Tap on a delivered notification → deep-link to its tab.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        if let window = AppDelegate.windowIndex(from: info) {
+            NotificationCenter.default.post(name: .deepLinkToWindow,
+                                            object: nil,
+                                            userInfo: ["window": window])
+            NotificationCenter.default.post(name: .paneRefreshRequested,
+                                            object: nil,
+                                            userInfo: ["window": window])
+        }
+        completionHandler()
     }
 }
 
@@ -96,9 +162,30 @@ final class LiveActivityManager {
 
     private init() {}
 
+    /// Post a single diagnostic line to the server so iOS-side Live Activity
+    /// events are visible in `/tmp/claude_sessions/server.log` alongside the
+    /// APNs push-side logs. Fire-and-forget, survives offline.
+    func postDiag(_ msg: String) {
+        Task.detached { [weak self] in
+            guard let server = await self?.server,
+                  let url = URL(string: "\(server.baseURL)/la-diag") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 3
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !server.authToken.isEmpty {
+                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+            }
+            let payload: [String: Any] = ["msg": msg, "session": "mobile"]
+            req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+            _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
     func startObservers() {
         guard !started else { return }
         started = true
+        postDiag("startObservers fired; activitiesEnabled=\(ActivityAuthorizationInfo().areActivitiesEnabled) existingCount=\(Activity<ClaudeActivityAttributes>.activities.count)")
 
         // Watch for push-to-start token updates and register each one.
         Task { [weak self] in
@@ -106,6 +193,7 @@ final class LiveActivityManager {
                 for await tokenData in Activity<ClaudeActivityAttributes>.pushToStartTokenUpdates {
                     let hex = tokenData.map { String(format: "%02x", $0) }.joined()
                     print("Live Activity push-to-start token: \(hex)")
+                    self?.postDiag("pushToStart token received prefix=\(String(hex.prefix(16)))")
                     await self?.register(startToken: hex)
                 }
             } else {
@@ -116,6 +204,7 @@ final class LiveActivityManager {
         // Watch existing and future activities so we can register their update tokens.
         Task { [weak self] in
             for await activity in Activity<ClaudeActivityAttributes>.activityUpdates {
+                self?.postDiag("activityUpdates yielded id=\(activity.id) state=\(activity.activityState) sessionLabel=\(activity.attributes.sessionLabel)")
                 await self?.observe(activity: activity)
             }
         }
@@ -127,11 +216,14 @@ final class LiveActivityManager {
     @discardableResult
     func startLocalActivity(sessionLabel: String = "mobile",
                             headline: String = "Working…") -> Activity<ClaudeActivityAttributes>? {
+        postDiag("startLocalActivity called sessionLabel=\(sessionLabel) headline=\(headline)")
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             print("Live Activities not enabled")
+            postDiag("startLocalActivity aborted: Activities not enabled in Settings")
             return nil
         }
         if Activity<ClaudeActivityAttributes>.activities.contains(where: { $0.attributes.sessionLabel == sessionLabel && $0.activityState == .active }) {
+            postDiag("startLocalActivity aborted: active activity already exists for sessionLabel=\(sessionLabel)")
             return nil
         }
         let state = ClaudeActivityAttributes.ContentState(
@@ -148,28 +240,47 @@ final class LiveActivityManager {
                 content: content,
                 pushType: .token
             )
+            postDiag("Activity.request succeeded id=\(activity.id)")
             Task { await observe(activity: activity) }
             return activity
         } catch {
             print("Failed to start Live Activity: \(error)")
+            postDiag("Activity.request threw: \(error.localizedDescription)")
             return nil
         }
     }
 
     private func observe(activity: Activity<ClaudeActivityAttributes>) async {
-        // Wait for the first push token before registering — server stores
-        // the token + activity_id + attributes in a single round-trip. Any
-        // subsequent token rotations are forwarded on the same endpoint.
+        postDiag("observe() started for id=\(activity.id); waiting pushTokenUpdates")
+        // Register the activity's current push token immediately (if one
+        // exists). pushTokenUpdates only yields NEW tokens, so an
+        // activity that was created via push-to-start before this observer
+        // attached may have a valid token cached on the activity but no
+        // update event to replay. Reading activity.pushToken synchronously
+        // covers that case.
+        if let existing = activity.pushToken {
+            let hex = existing.map { String(format: "%02x", $0) }.joined()
+            postDiag("observe() existing pushToken id=\(activity.id) tokenPrefix=\(String(hex.prefix(16)))")
+            await register(activity: activity, token: hex)
+        }
         for await tokenData in activity.pushTokenUpdates {
             let hex = tokenData.map { String(format: "%02x", $0) }.joined()
             print("Live Activity update token for \(activity.id): \(hex)")
+            postDiag("pushTokenUpdates yielded id=\(activity.id) tokenPrefix=\(String(hex.prefix(16)))")
             await register(activity: activity, token: hex)
         }
+        postDiag("observe() loop ended for id=\(activity.id) (activity probably dismissed)")
     }
 
     private func register(startToken hex: String) async {
-        guard let server = server,
-              let url = URL(string: "\(server.baseURL)/register-liveactivity-start-token") else { return }
+        guard let server = server else {
+            postDiag("register(startToken:) skipped — server is nil")
+            return
+        }
+        guard let url = URL(string: "\(server.baseURL)/register-liveactivity-start-token") else {
+            postDiag("register(startToken:) bad URL")
+            return
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -182,15 +293,23 @@ final class LiveActivityManager {
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         do {
-            _ = try await URLSession.shared.data(for: req)
+            let (_, response) = try await URLSession.shared.data(for: req)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            postDiag("POST /register-liveactivity-start-token → \(code) tokenPrefix=\(String(hex.prefix(16)))")
         } catch {
-            print("start-token registration failed: \(error)")
+            postDiag("POST /register-liveactivity-start-token threw: \(error.localizedDescription)")
         }
     }
 
     private func register(activity: Activity<ClaudeActivityAttributes>, token: String?) async {
-        guard let server = server,
-              let url = URL(string: "\(server.baseURL)/register-liveactivity-token") else { return }
+        guard let server = server else {
+            postDiag("register(activity:) skipped — server is nil id=\(activity.id)")
+            return
+        }
+        guard let url = URL(string: "\(server.baseURL)/register-liveactivity-token") else {
+            postDiag("register(activity:) bad URL id=\(activity.id)")
+            return
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -206,9 +325,12 @@ final class LiveActivityManager {
         if let token = token { payload["token"] = token }
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         do {
-            _ = try await URLSession.shared.data(for: req)
+            let (_, response) = try await URLSession.shared.data(for: req)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let tokenPreview = token.map { String($0.prefix(16)) } ?? "nil"
+            postDiag("POST /register-liveactivity-token → \(code) id=\(activity.id) tokenPrefix=\(tokenPreview)")
         } catch {
-            print("activity-token registration failed: \(error)")
+            postDiag("POST /register-liveactivity-token threw id=\(activity.id): \(error.localizedDescription)")
         }
     }
 }

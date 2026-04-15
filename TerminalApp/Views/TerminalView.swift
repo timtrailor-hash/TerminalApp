@@ -12,7 +12,27 @@ struct TmuxWindow: Identifiable, Equatable {
     let index: Int
     let name: String
     let active: Bool
+    let command: String
+    let cwd: String
+    let summary: String
+    let status: String
+    let elapsed: Int
+    let pendingApproval: Bool
+    let pendingToolName: String
     var id: Int { index }
+}
+
+private func formatTabStatus(_ status: String, _ elapsed: Int) -> String {
+    guard elapsed >= 0 else { return "" }
+    let time: String
+    if elapsed < 60 { time = "\(elapsed)s" }
+    else if elapsed < 3600 { time = "\(elapsed / 60)m" }
+    else { time = "\(elapsed / 3600)h" }
+    switch status {
+    case "working": return "working \(time)"
+    case "idle":    return "idle \(time)"
+    default:        return ""
+    }
 }
 
 /// Native SSH terminal using SwiftTerm + NIOSSH.
@@ -33,6 +53,9 @@ struct TerminalView: View {
 
     // Tmux window tabs
     @State private var tmuxWindows: [TmuxWindow] = []
+    @State private var renameTargetIndex: Int? = nil
+    @State private var renameText: String = ""
+    @State private var showRenameAlert: Bool = false
     @State private var tmuxPollTimer: Timer?
     @State private var isExporting = false
     @State private var exportStatus: String?
@@ -83,6 +106,8 @@ struct TerminalView: View {
                             commandRunner: commandRunner,
                             ssh: ssh,
                             activeWindowIndex: activeWindowIndex,
+                            pendingApproval: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingApproval ?? false,
+                            pendingToolName: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingToolName ?? "",
                             onCapturedText: { lastCapturedText = $0 }
                         )
                     } else {
@@ -102,13 +127,6 @@ struct TerminalView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 14) {
-                    Button {
-                        hardResetTmux()
-                    } label: {
-                        Image(systemName: "exclamationmark.arrow.circlepath")
-                            .foregroundColor(AppTheme.accent)
-                    }
-
                     Menu {
                         Button {
                             showCamera = true
@@ -306,8 +324,28 @@ struct TerminalView: View {
                 stopTmuxPolling()
             }
         }
+        .onAppear {
+            // If SwiftUI re-instantiated the view (or the previous timer was
+            // invalidated by a UI event), kick polling back on so the tab
+            // bar doesn't silently freeze.
+            if ssh.isConnected && tmuxPollTimer == nil {
+                startTmuxPolling()
+            }
+        }
         .onDisappear {
             stopTmuxPolling()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .deepLinkToWindow)) { note in
+            guard let window = note.userInfo?["window"] as? Int else { return }
+            if activeWindowIndex != window {
+                activeWindowIndex = window
+            }
+            // Force a tab-bar + pane refresh so the latest content is in
+            // place by the time the scene finishes becoming active.
+            pollTmuxWindows()
+            NotificationCenter.default.post(name: .paneRefreshRequested,
+                                            object: nil,
+                                            userInfo: ["window": window])
         }
     }
 
@@ -316,23 +354,33 @@ struct TerminalView: View {
 
     private var tmuxTabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
+            HStack(spacing: 6) {
                 ForEach(tmuxWindows) { window in
                     Button {
                         selectTmuxWindow(index: window.index)
                     } label: {
-                        HStack(spacing: 4) {
-                            Text("\(window.index)")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundColor(window.active ? AppTheme.background : AppTheme.accent.opacity(0.6))
-                            Text(window.name)
+                        HStack(alignment: .top, spacing: 6) {
+                            VStack(spacing: 3) {
+                                Text("\(window.index)")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(window.active ? AppTheme.background.opacity(0.75) : AppTheme.accent.opacity(0.55))
+                                Image(systemName: window.status == "working" ? "circle.fill" : "checkmark.circle.fill")
+                                    .font(.system(size: 7))
+                                    .foregroundColor(window.status == "working" ? .green : (window.active ? AppTheme.background.opacity(0.5) : .white.opacity(0.35)))
+                            }
+                            Text(window.summary.isEmpty ? (window.command.isEmpty ? window.name : window.command) : window.summary)
                                 .font(.system(size: 12, weight: window.active ? .semibold : .regular, design: .monospaced))
-                                .foregroundColor(window.active ? AppTheme.background : .white.opacity(0.8))
+                                .foregroundColor(window.active ? AppTheme.background : .white.opacity(0.9))
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .frame(minWidth: 140, maxWidth: 170, minHeight: 54, alignment: .topLeading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         .background(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: 8)
                                 .fill(window.active ? AppTheme.accent : AppTheme.cardBackground)
                         )
                     }
@@ -341,6 +389,13 @@ struct TerminalView: View {
                             selectTmuxWindow(index: window.index)
                         } label: {
                             Label("Switch to", systemImage: "arrow.right.circle")
+                        }
+                        Button {
+                            renameTargetIndex = window.index
+                            renameText = window.summary.isEmpty ? window.name : window.summary
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
                         }
                         Button(role: .destructive) {
                             closeTmuxWindow(index: window.index)
@@ -355,24 +410,60 @@ struct TerminalView: View {
                     createTmuxWindow()
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(AppTheme.accent.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(AppTheme.accent.opacity(0.7))
+                        .frame(width: 44)
+                        .frame(maxHeight: .infinity)
+                        .padding(.vertical, 8)
                         .background(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: 8)
                                 .fill(AppTheme.cardBackground)
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .strokeBorder(AppTheme.accent.opacity(0.2), lineWidth: 1)
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .strokeBorder(AppTheme.accent.opacity(0.25), lineWidth: 1)
                                 )
                         )
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .background(AppTheme.background)
+        .alert("Rename tab", isPresented: $showRenameAlert, actions: {
+            TextField("Name", text: $renameText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            Button("Save") {
+                if let idx = renameTargetIndex {
+                    renameTmuxWindow(index: idx, name: renameText)
+                }
+                renameTargetIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                renameTargetIndex = nil
+            }
+        }, message: {
+            Text("Give this tab a name. It will stay until you rename or close it.")
+        })
+    }
+
+    private func renameTmuxWindow(index: Int, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let url = URL(string: "\(server.baseURL)/tmux-rename-window") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "index": index,
+            "name": trimmed,
+        ])
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                pollTmuxWindows()
+            }
+        }.resume()
     }
 
     private func createTmuxWindow() {
@@ -381,8 +472,26 @@ struct TerminalView: View {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = "{}".data(using: .utf8)
-        URLSession.shared.dataTask(with: request) { _, _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { pollTmuxWindows() }
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            // Read the new window index from the server so we can switch to
+            // it immediately. Without this, activeWindowIndex stays on the
+            // previous tab and the very next sendInput() routes into the
+            // wrong pane.
+            var newIndex: Int? = nil
+            if let data = data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let idx = json["index"] as? Int, idx > 0 {
+                newIndex = idx
+            }
+            DispatchQueue.main.async {
+                if let idx = newIndex {
+                    activeWindowIndex = idx
+                    selectTmuxWindow(index: idx)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    pollTmuxWindows()
+                }
+            }
         }.resume()
     }
 
@@ -410,24 +519,6 @@ struct TerminalView: View {
         }.resume()
     }
 
-    private func hardResetTmux() {
-        guard let url = URL(string: "\(server.baseURL)/tmux-reset") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = "{}".data(using: .utf8)
-        URLSession.shared.dataTask(with: request) { _, _, _ in
-            DispatchQueue.main.async {
-                // Reset UI state and immediately poll the new session
-                tmuxWindows = []
-                activeWindowIndex = 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    pollTmuxWindows()
-                }
-            }
-        }.resume()
-    }
-
     private func selectTmuxWindow(index: Int) {
         // Update local state immediately so SplitTerminalView targets the right window
         activeWindowIndex = index
@@ -443,8 +534,17 @@ struct TerminalView: View {
     }
 
     private func pollTmuxWindows() {
-        guard ssh.isConnected,
-              let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
+        guard ssh.isConnected else { return }
+        if tmuxPollTimer == nil {
+            // Something invalidated our timer without us restarting; the tab
+            // bar would otherwise freeze. Arm a fresh one inline.
+            let t = Timer(timeInterval: 3, repeats: true) { _ in
+                pollTmuxWindows()
+            }
+            RunLoop.main.add(t, forMode: .common)
+            tmuxPollTimer = t
+        }
+        guard let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -453,7 +553,18 @@ struct TerminalView: View {
                 guard let index = w["index"] as? Int,
                       let name = w["name"] as? String,
                       let active = w["active"] as? Bool else { return nil }
-                return TmuxWindow(index: index, name: name, active: active)
+                let command = (w["command"] as? String) ?? ""
+                let cwd = (w["cwd"] as? String) ?? ""
+                let summary = (w["summary"] as? String) ?? ""
+                let status = (w["status"] as? String) ?? ""
+                let elapsed = (w["elapsed"] as? Int) ?? -1
+                let pendingApproval = (w["pendingApproval"] as? Bool) ?? false
+                let pendingToolName = (w["pendingToolName"] as? String) ?? ""
+                return TmuxWindow(index: index, name: name, active: active,
+                                  command: command, cwd: cwd, summary: summary,
+                                  status: status, elapsed: elapsed,
+                                  pendingApproval: pendingApproval,
+                                  pendingToolName: pendingToolName)
             }
             DispatchQueue.main.async {
                 tmuxWindows = windows
@@ -468,16 +579,23 @@ struct TerminalView: View {
 
     private func startTmuxPolling() {
         tmuxPollTimer?.invalidate()
-        tmuxPollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+        // Use Timer(timeInterval:repeats:block:) + RunLoop.common so the
+        // poll keeps firing even while the keyboard is up or the pane is
+        // scrolling (the default runloop mode pauses under UI tracking).
+        let t = Timer(timeInterval: 3, repeats: true) { _ in
             pollTmuxWindows()
         }
+        RunLoop.main.add(t, forMode: .common)
+        tmuxPollTimer = t
         pollTmuxWindows() // immediate first poll
     }
 
     private func stopTmuxPolling() {
         tmuxPollTimer?.invalidate()
         tmuxPollTimer = nil
-        tmuxWindows = []
+        // Deliberately DO NOT clear tmuxWindows here. If the view reappears
+        // before the next poll tick, the user keeps seeing the last-known
+        // tabs instead of an empty bar.
     }
 
     // MARK: - Sub-views

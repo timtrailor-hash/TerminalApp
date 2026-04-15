@@ -1,10 +1,91 @@
 import SwiftUI
+import UIKit
 import TimSharedKit
 import os
 
 private let splitLog = Logger(subsystem: "com.timtrailor.terminal", category: "splitView")
 
 /// Split-screen terminal view: scrollable output on top, text input on bottom.
+private struct SelectablePaneView: UIViewRepresentable {
+    let attributedText: NSAttributedString
+    @Binding var autoScroll: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(autoScroll: $autoScroll) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.backgroundColor = .clear
+        tv.textContainerInset = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.textContainer.lineBreakMode = .byWordWrapping
+        tv.dataDetectorTypes = []
+        tv.showsVerticalScrollIndicator = true
+        tv.alwaysBounceVertical = true
+        tv.adjustsFontForContentSizeCategory = false
+        tv.textContainer.maximumNumberOfLines = 0
+        tv.delegate = context.coordinator
+        return tv
+    }
+
+    func updateUIView(_ tv: UITextView, context: Context) {
+        // Skip the update entirely if the attributed content is identical.
+        // Every  rewrite forces a full re-layout and
+        // flashes the visible text — with a 1.5s poll tick that was
+        // making the pane strobe.
+        if let current = tv.attributedText, current.isEqual(to: attributedText) {
+            return
+        }
+        let wasAtBottom = Self.isScrolledToBottom(tv)
+        let savedRange = tv.selectedRange
+        let hadSelection = savedRange.length > 0
+        // Use textStorage begin/endEditing for in-place update — smoother
+        // than reassigning attributedText because UITextView coalesces the
+        // layout invalidation into a single pass.
+        tv.textStorage.beginEditing()
+        tv.textStorage.setAttributedString(attributedText)
+        tv.textStorage.endEditing()
+        if hadSelection && savedRange.location + savedRange.length <= tv.attributedText.length {
+            tv.selectedRange = savedRange
+        }
+        if autoScroll && wasAtBottom {
+            DispatchQueue.main.async { Self.scrollToBottom(tv) }
+        }
+    }
+
+    fileprivate static func isScrolledToBottom(_ tv: UITextView) -> Bool {
+        let visibleBottom = tv.contentOffset.y + tv.bounds.size.height
+        let distance = tv.contentSize.height - visibleBottom
+        return distance < 24
+    }
+
+    fileprivate static func scrollToBottom(_ tv: UITextView) {
+        let y = max(0, tv.contentSize.height - tv.bounds.size.height)
+        tv.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var autoScroll: Binding<Bool>
+        init(autoScroll: Binding<Bool>) { self.autoScroll = autoScroll }
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard let tv = scrollView as? UITextView else { return }
+            let atBottom = SelectablePaneView.isScrolledToBottom(tv)
+            if autoScroll.wrappedValue != atBottom {
+                autoScroll.wrappedValue = atBottom
+            }
+        }
+    }
+}
+
+
+private struct PromptOption: Identifiable, Equatable {
+    let number: Int
+    let label: String
+    var id: Int { number }
+}
+
+
 struct SplitTerminalView: View {
     @ObservedObject var commandRunner: SSHCommandRunner
     @ObservedObject var ssh: SSHTerminalService
@@ -12,9 +93,15 @@ struct SplitTerminalView: View {
 
     /// The tmux window index the user is currently viewing. Defaults to 1.
     let activeWindowIndex: Int
+    /// JSONL-based pending-approval state from /tmux-windows. When true,
+    /// Claude Code is waiting for a tool-use permission response — show
+    /// fixed Yes/Allow/No buttons without any pane-text parsing.
+    var pendingApproval: Bool = false
+    var pendingToolName: String = ""
     var onCapturedText: ((String) -> Void)?
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
+    @State private var promptOptions: [PromptOption] = []
     @State private var perTabInput: [Int: String] = [:]
     @State private var perTabPaneHash: [Int: Int] = [:]
     @State private var hasLoadedOnce: Bool = false
@@ -27,6 +114,25 @@ struct SplitTerminalView: View {
     @State private var fastPollUntil: Date = .distantPast
     @State private var isUserScrolledUp = false
     @FocusState private var inputFocused: Bool
+
+    // Last pane size we told the server about. The server defaults to 80x23 which
+    // is way wider than the iPhone's ~48-col display, so Claude Code CLI wraps
+    // its TUI at 78 and we then re-wrap visually → mid-paragraph breaks. We
+    // recompute on every GeometryReader pass and push to /tmux-resize whenever
+    // it changes (rotation, keyboard show/hide).
+    @State private var lastPushedCols: Int = 0
+    @State private var lastPushedRows: Int = 0
+
+    // Font metrics for the output text. Keep in sync with the Text modifier below.
+    private static let outputFontSize: CGFloat = 12
+    private static let outputFontCellWidth: CGFloat = {
+        let f = UIFont.monospacedSystemFont(ofSize: outputFontSize, weight: .regular)
+        return ("M" as NSString).size(withAttributes: [.font: f]).width
+    }()
+    private static let outputFontLineHeight: CGFloat = {
+        let f = UIFont.monospacedSystemFont(ofSize: outputFontSize, weight: .regular)
+        return f.lineHeight
+    }()
 
     // MARK: - HTTP helpers
 
@@ -70,6 +176,43 @@ struct SplitTerminalView: View {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    private func httpTmuxResize(cols: Int, rows: Int) async {
+        guard let url = URL(string: "\(server.baseURL)/tmux-resize") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !server.authToken.isEmpty {
+            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "cols": cols,
+            "rows": rows,
+            "session": "mobile",
+        ])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Called from GeometryReader whenever the output pane's size changes.
+    /// Recomputes tmux cols/rows from the monospace cell metrics and pushes
+    /// them to the server — but only when they actually change, so rotation
+    /// or keyboard toggles are handled without flooding the server.
+    private func updateTmuxPaneSize(outputSize: CGSize) {
+        // Output pane has 8pt horizontal padding on each side (see `.padding(.horizontal, 8)`
+        // on each Text row). Subtract both sides before dividing by cell width.
+        let usableWidth = max(outputSize.width - 16, 0)
+        let cols = max(20, Int(floor(usableWidth / Self.outputFontCellWidth)))
+        let rows = max(10, Int(floor(outputSize.height / Self.outputFontLineHeight)))
+        if cols == lastPushedCols && rows == lastPushedRows { return }
+        lastPushedCols = cols
+        lastPushedRows = rows
+        Task {
+            await httpTmuxResize(cols: cols, rows: rows)
+            // Immediately refetch so the user sees reflowed content without waiting
+            // for the next 1.5s poll tick.
+            await refreshPane()
+        }
+    }
+
     private var inputText: Binding<String> {
         Binding(
             get: { perTabInput[activeWindowIndex] ?? "" },
@@ -95,15 +238,25 @@ struct SplitTerminalView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let outputHeight = geo.size.height * 0.68
+            let outputSize = CGSize(width: geo.size.width, height: outputHeight)
             VStack(spacing: 0) {
                 outputSection
-                    .frame(height: geo.size.height * 0.68)
+                    .frame(height: outputHeight)
+
+                if !effectivePromptOptions.isEmpty {
+                    promptOptionsRow
+                }
 
                 Divider()
                     .background(AppTheme.accent.opacity(0.3))
 
                 inputSection
                     .frame(height: geo.size.height * 0.32)
+            }
+            .onAppear { updateTmuxPaneSize(outputSize: outputSize) }
+            .onChange(of: outputSize) { _, newSize in
+                updateTmuxPaneSize(outputSize: newSize)
             }
         }
         .background(AppTheme.background)
@@ -114,69 +267,264 @@ struct SplitTerminalView: View {
             isUserScrolledUp = false
             Task { await refreshPane() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .paneRefreshRequested)) { note in
+            // Silent push or notification tap requested a fresh capture.
+            // If it's for this tab, pull now; if it's for another tab,
+            // invalidate that tab's hash so the next switch refreshes.
+            let targetWindow = (note.userInfo?["window"] as? Int) ?? activeWindowIndex
+            if targetWindow == activeWindowIndex {
+                Task { await refreshPane() }
+            } else {
+                perTabPaneHash[targetWindow] = 0
+            }
+        }
     }
 
     // MARK: - Output Section
 
-    private var outputSection: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if paneLines.isEmpty {
-                        Text(hasLoadedOnce ? "" : "Loading...")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(AppTheme.dimText)
-                            .padding(.horizontal, 8)
-                            .padding(.top, 8)
-                    } else {
-                        ForEach(paneLines) { line in
-                            Text(line.text)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(colorFor(line.lineType))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 0.5)
-                                .id(line.id)
-                        }
-                    }
-                }
-                .textSelection(.enabled)
-            }
-            .background(AppTheme.background)
-            .onChange(of: paneLines.count) { _, _ in
-                if !isUserScrolledUp, let last = paneLines.last {
-                    // Small delay to let layout complete before scrolling
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-            .simultaneousGesture(
-                DragGesture().onChanged { value in
-                    if value.translation.height > 10 {
-                        isUserScrolledUp = true
-                    }
-                }
-            )
-            .overlay(alignment: .bottomTrailing) {
-                if isUserScrolledUp {
-                    Button {
-                        isUserScrolledUp = false
-                        if let last = paneLines.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    } label: {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundColor(AppTheme.accent)
-                            .background(Circle().fill(AppTheme.background))
-                    }
-                    .padding(8)
-                }
+    /// Build a single AttributedString containing every line in the pane,
+    /// each carrying its classifier colour as a foreground attribute on its
+    /// substring run. Rendering this as one `Text(...)` (instead of one
+    /// Text per line in a LazyVStack) is what unlocks cross-line selection
+    /// on iOS — SwiftUI only permits selection within one Text view, so we
+    /// collapse all the lines into that single view while preserving the
+    /// per-run colours via AttributedString.
+    private func buildPaneAttributedText(_ lines: [PaneLine]) -> AttributedString {
+        var result = AttributedString("")
+        for (idx, line) in lines.enumerated() {
+            // Empty lines still need a substring so the newline renders.
+            let raw = line.text.isEmpty ? " " : line.text
+            var run = AttributedString(raw)
+            run.foregroundColor = colorFor(line.lineType)
+            result.append(run)
+            if idx < lines.count - 1 {
+                result.append(AttributedString("\n"))
             }
         }
+        return result
+    }
+
+    /// Detect an ACTIVE Claude Code permission prompt in the current pane.
+    /// Must satisfy all of:
+    ///   1. Options appear in the last 25 lines (not older scrollback).
+    ///   2. Everything between the options and the pane bottom is "chrome"
+    ///      — empty, box border, status bar, or empty ❯ input prompt.
+    ///      ANY substantive line below the options (shell output, user
+    ///      text, `❯ 2` etc) means the prompt has been dismissed and we
+    ///      return empty so the clickable button row disappears.
+    ///   3. At least 2 contiguous options numbered 1…N.
+    private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
+        let tail = Array(lines.suffix(25))
+
+        // Walk bottom-up: skip chrome, find the first option line.
+        var lastOptIdx: Int? = nil
+        for i in stride(from: tail.count - 1, through: 0, by: -1) {
+            let raw = tail[i].text
+            if parsePromptOptionLine(raw) != nil {
+                lastOptIdx = i
+                break
+            }
+            if !isPromptChromeLine(raw) {
+                // Could be a wrapped continuation of a multi-line option
+                // label (e.g. "  this session" wrapping from option 2).
+                // If the line is indented (>= 4 spaces) and doesn't start
+                // with a number, treat it as chrome and keep walking.
+                let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                let leadingSpaces = raw.prefix(while: { $0 == " " }).count
+                let looksLikeContinuation = leadingSpaces >= 4
+                    && !trimmed.isEmpty
+                    && !(trimmed.first?.isNumber ?? false)
+                if looksLikeContinuation {
+                    continue
+                }
+                return []   // substantive line below — prompt is dismissed
+            }
+        }
+        guard let endIdx = lastOptIdx else { return [] }
+
+        // Walk upward collecting the contiguous options block.
+        // Skip wrapped continuation lines (indented, no number prefix)
+        // between option lines.
+        var startIdx = endIdx
+        while startIdx > 0 {
+            let prevText = tail[startIdx - 1].text
+            if parsePromptOptionLine(prevText) != nil {
+                startIdx -= 1
+                continue
+            }
+            // Wrapped continuation of a multi-line option label?
+            let trimmed = prevText.trimmingCharacters(in: .whitespaces)
+            let leadingSpaces = prevText.prefix(while: { $0 == " " }).count
+            if leadingSpaces >= 4 && !trimmed.isEmpty && !(trimmed.first?.isNumber ?? false) {
+                startIdx -= 1
+                continue
+            }
+            break
+        }
+
+        var collected: [(Int, String)] = []
+        for i in startIdx...endIdx {
+            guard let parsed = parsePromptOptionLine(tail[i].text) else { return [] }
+            collected.append(parsed)
+        }
+        guard collected.count >= 2 else { return [] }
+        for (i, entry) in collected.enumerated() where entry.0 != i + 1 {
+            return []
+        }
+        return collected.map { PromptOption(number: $0.0, label: $0.1) }
+    }
+
+    /// Lines allowed between the options block and the pane bottom without
+    /// invalidating the prompt detection. Everything else (user text,
+    /// shell prompts with actual content, task list items) counts as real
+    /// content and dismisses the buttons.
+    private func isPromptChromeLine(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return true }
+        if t.hasPrefix("╭") || t.hasPrefix("╰") || t.hasPrefix("─") { return true }
+        if t.hasPrefix("│") && t.hasSuffix("│") {
+            // A box-drawn row is only chrome if its interior is blank.
+            let inner = String(t.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespaces)
+            return inner.isEmpty
+        }
+        let lower = t.lowercased()
+        if lower.contains("esc to") { return true }
+        if lower.contains("tab to") { return true }
+        if lower.contains("press up") { return true }
+        if lower.contains("ctrl+") { return true }
+        if lower.contains("shift+") { return true }
+        if lower.contains("for shortcuts") { return true }
+        if lower.contains("? for") { return true }
+        // An input prompt with nothing in it is still "waiting"; a prompt
+        // with content after it (like `❯ 2`) is real user input and should
+        // disqualify the detection.
+        if t == "❯" || t == ">" { return true }
+        return false
+    }
+
+    private func parsePromptOptionLine(_ raw: String) -> (Int, String)? {
+        var body = raw.trimmingCharacters(in: .whitespaces)
+        // Strip Claude Code's leading markers: box-drawing │, selection ❯,
+        // ASCII > and bullet variants that might appear before the number.
+        let markerChars: Set<Character> = ["│", "❯", "\u{203A}", ">", "•", "·"]
+        while let first = body.first, markerChars.contains(first) {
+            body = String(body.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        // Trailing box-drawing on the right (Claude Code's prompt box).
+        while let last = body.last, last == "│" {
+            body = String(body.dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        // Match "N. label" (dot, permission prompt) or "N: label" (colon,
+        // session feedback survey). Both are single-keystroke handlers in
+        // Claude Code and should get the bare-key treatment.
+        var separatorIdx: String.Index? = nil
+        if let dotIdx = body.firstIndex(of: ".") {
+            let numStr = body[..<dotIdx]
+            if let _ = Int(numStr) { separatorIdx = dotIdx }
+        }
+        if separatorIdx == nil, let colonIdx = body.firstIndex(of: ":") {
+            let numStr = body[..<colonIdx]
+            if let _ = Int(numStr) { separatorIdx = colonIdx }
+        }
+        guard let sepIdx = separatorIdx,
+              let num = Int(body[..<sepIdx]),
+              (0...9).contains(num) else { return nil }
+        let rest = body[body.index(after: sepIdx)...]
+            .trimmingCharacters(in: .whitespaces)
+        guard !rest.isEmpty else { return nil }
+        // Cap label length so the button row stays scannable.
+        let label = rest.count > 60 ? String(rest.prefix(57)) + "…" : rest
+        return (num, label)
+    }
+
+    private func sendPromptChoice(_ number: Int) {
+        let window = activeWindowIndex
+        // Clear the visible buttons optimistically so a rapid double-tap
+        // can't fire two sends.
+        promptOptions = []
+        Task {
+            // Send just the digit as a bare keystroke via /tmux-send-key.
+            // Claude Code's prompt handlers (permission + survey) read
+            // single key-presses, not text+enter. Using paste-buffer +
+            // enter would bypass the handler and land in Claude's normal
+            // input prompt instead.
+            await httpSendKey("\(number)", window: window)
+            fastPollUntil = Date().addingTimeInterval(10)
+            await refreshPane()
+        }
+    }
+
+    private func httpSendKey(_ key: String, window: Int) async {
+        guard let url = URL(string: "\(server.baseURL)/tmux-send-key") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !server.authToken.isEmpty {
+            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "window": window,
+            "key": key,
+        ])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    private func uiColorFor(_ type: LineType) -> UIColor {
+        switch type {
+        case .userInput:
+            return UIColor(red: 0.4, green: 0.8, blue: 1.0, alpha: 1)
+        case .claudeText:
+            return UIColor(red: 0.88, green: 0.88, blue: 0.88, alpha: 1)
+        case .system:
+            return UIColor(red: 0.6, green: 0.6, blue: 0.6, alpha: 1)
+        }
+    }
+
+    private func buildPaneNSAttributed(_ lines: [PaneLine]) -> NSAttributedString {
+        let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let para = NSMutableParagraphStyle()
+        para.lineSpacing = 1
+        para.lineBreakMode = .byWordWrapping
+        let result = NSMutableAttributedString()
+        for (idx, line) in lines.enumerated() {
+            let raw = line.text.isEmpty ? " " : line.text
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: uiColorFor(line.lineType),
+                .paragraphStyle: para,
+            ]
+            result.append(NSAttributedString(string: raw, attributes: attrs))
+            if idx < lines.count - 1 {
+                result.append(NSAttributedString(string: "\n", attributes: attrs))
+            }
+        }
+        return result
+    }
+
+    private var outputSection: some View {
+        Group {
+            if paneLines.isEmpty {
+                VStack(alignment: .leading) {
+                    Text(hasLoadedOnce ? "" : "Loading...")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(AppTheme.dimText)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 8)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                SelectablePaneView(
+                    attributedText: buildPaneNSAttributed(paneLines),
+                    autoScroll: Binding(
+                        get: { !isUserScrolledUp },
+                        set: { isUserScrolledUp = !$0 }
+                    )
+                )
+            }
+        }
+        .background(AppTheme.background)
     }
 
     // MARK: - Color coding
@@ -192,27 +540,140 @@ struct SplitTerminalView: View {
         }
     }
 
-    private func classifyLine(_ text: String) -> LineType {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
+    /// Classify a full pane in one pass so prompt-continuation lines inherit the
+    /// userInput colour. Per-line classification breaks colouring when Claude
+    /// Code wraps a prompt across multiple visual rows — only the first row
+    /// starts with `❯ `; the rest are indented continuations that used to be
+    /// rendered as `.claudeText` (grey) and leak out of the highlight.
+    private func classifyLines(_ lines: [String]) -> [LineType] {
+        var result: [LineType] = []
+        result.reserveCapacity(lines.count)
+        var inPrompt = false
+        for raw in lines {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
-        // User prompt lines (Claude Code uses ❯ or > as prompt)
-        if trimmed.hasPrefix("❯ ") || trimmed.hasPrefix("> ") || trimmed.hasPrefix("$ ") {
-            return .userInput
+            // Claude Code renders the user prompt as ❯ (U+276F) or › (U+203A)
+            // followed by U+00A0 or a space. EXCEPTION: Claude's streaming
+            // "Thinking a bit longer…" placeholder also starts with › —
+            // detect by checking for gerund + trailing ellipsis.
+            let startsWithChevron = trimmed.hasPrefix("❯")
+            let startsWithShellPrompt = trimmed.hasPrefix("> ") || trimmed.hasPrefix("$ ")
+            if startsWithChevron || startsWithShellPrompt {
+                let afterMarker = String(trimmed.dropFirst())
+                    .trimmingCharacters(in: .whitespaces)
+                let isThinkingPlaceholder = afterMarker.hasSuffix("\u{2026}") && (
+                    afterMarker.contains("Thinking") ||
+                    afterMarker.contains("Working") ||
+                    afterMarker.contains("Considering") ||
+                    afterMarker.contains("Analysing") ||
+                    afterMarker.contains("Analyzing") ||
+                    afterMarker.contains("Planning") ||
+                    afterMarker.contains("still working")
+                )
+                if isThinkingPlaceholder {
+                    inPrompt = false
+                    result.append(.system)
+                    continue
+                }
+                inPrompt = true
+                result.append(.userInput)
+                continue
+            }
+
+            // Tool indicators / box drawing reset the prompt-continuation mode
+            // and are classified as system.
+            if trimmed.hasPrefix("⏺") || trimmed.hasPrefix("●") ||
+               trimmed.hasPrefix("─") || trimmed.hasPrefix("╭") || trimmed.hasPrefix("╰") ||
+               trimmed.hasPrefix("│") || trimmed.hasPrefix("├") ||
+               trimmed.hasPrefix("\u{2022}") ||
+               trimmed.hasPrefix("*") || trimmed.hasPrefix("\u{00B7}") ||
+               trimmed.hasPrefix("\u{23BF}") || trimmed.hasPrefix("\u{2514}") ||
+               trimmed.hasPrefix("\u{2570}") {
+                inPrompt = false
+                result.append(.system)
+                continue
+            }
+
+            if inPrompt {
+                // A prompt continuation is either an indented wrap of the
+                // previous user line, or a blank line inside a multi-line
+                // prompt. It must start with actual prose (a letter or
+                // common opening punctuation) — Claude Code's streaming
+                // "Thinking..." placeholders start with special indicator
+                // chars like `›`, `*`, `·`, `⎿` and must NOT be coloured as
+                // user input even when indented.
+                let leadingWhitespace = raw.prefix(while: { $0 == " " }).count
+                if trimmed.isEmpty {
+                    result.append(.userInput)
+                    continue
+                }
+                let first = trimmed.first
+                let looksLikeProse = first.map { ch -> Bool in
+                    if ch.isLetter || ch.isNumber { return true }
+                    return "\"'(\u{201C}\u{2018}[-".contains(ch)
+                } ?? false
+                if leadingWhitespace >= 2 && looksLikeProse {
+                    result.append(.userInput)
+                    continue
+                }
+                inPrompt = false
+            }
+
+            result.append(.claudeText)
         }
+        return result
+    }
 
-        // Lines that look like the user's message continuation (after prompt)
-        // Tool use indicators
-        if trimmed.hasPrefix("⏺") || trimmed.hasPrefix("●") {
-            return .system
+    /// Primary: JSONL-based approval detection (deterministic, no text parsing).
+    /// Fallback: pane-text-based detection (for surveys, non-standard prompts).
+    private var effectivePromptOptions: [PromptOption] {
+        if pendingApproval {
+            return [
+                PromptOption(number: 1, label: "Yes"),
+                PromptOption(number: 2, label: "Allow \(pendingToolName) for session"),
+                PromptOption(number: 3, label: "No"),
+            ]
         }
+        return promptOptions
+    }
 
-        // File paths, tool headers
-        if trimmed.hasPrefix("─") || trimmed.hasPrefix("╭") || trimmed.hasPrefix("╰") ||
-           trimmed.hasPrefix("│") || trimmed.hasPrefix("├") {
-            return .system
+    // MARK: - Prompt Option Buttons
+
+    private var promptOptionsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(effectivePromptOptions) { opt in
+                    Button {
+                        sendPromptChoice(opt.number)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("\(opt.number)")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                            Text(opt.label)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(AppTheme.cardBackground)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                                )
+                        )
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
-
-        return .claudeText
+        .background(AppTheme.background)
+        .frame(maxHeight: 52)
     }
 
     // MARK: - Input Section
@@ -269,6 +730,21 @@ struct SplitTerminalView: View {
         perTabInput[activeWindowIndex] = ""
         isUserScrolledUp = false // auto-scroll to see response
 
+        // Kick a local Live Activity scoped to THIS tab (mobile-<windowIndex>)
+        // so multiple concurrent tabs each get their own Island + lock-screen
+        // card rather than fighting over a single aggregated activity. This
+        // matches Apple's recommended pattern (Uber/Clock/sports apps all
+        // use one Activity per discrete task).
+        let laSessionLabel = "mobile-\(window)"
+        Task { @MainActor in
+            if #available(iOS 16.2, *) {
+                _ = LiveActivityManager.shared.startLocalActivity(
+                    sessionLabel: laSessionLabel,
+                    headline: "Working…"
+                )
+            }
+        }
+
         Task {
             await httpSendText(textToSend, window: window)
             await httpSendEnter(window: window)
@@ -289,7 +765,12 @@ struct SplitTerminalView: View {
         if !server.authToken.isEmpty {
             request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
         }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["session": "mobile"])
+        // session = "mobile-<window>" so the tmux watcher + Live Activity
+        // fallback both scope to this specific tab.
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "session": "mobile",                              // actual tmux session name
+            "label": "mobile-\(activeWindowIndex)",           // LA session label
+        ])
         URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
     }
 
@@ -297,11 +778,17 @@ struct SplitTerminalView: View {
 
     private func startPolling() {
         stopPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+        // RunLoop .common so the tick survives scrolling + keyboard input.
+        // The .default mode (what scheduledTimer uses) gets starved during
+        // UITextView interaction, leaving the pane stale until the user
+        // switches tabs and switches back — which was the whole symptom.
+        let t = Timer(timeInterval: 1.5, repeats: true) { _ in
             Task { @MainActor in
                 await refreshPane()
             }
         }
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
         Task { await refreshPane() }
         splitLog.info("Polling started")
     }
@@ -322,14 +809,22 @@ struct SplitTerminalView: View {
         perTabPaneHash[capturedIndex] = hash
 
         let lines = content.components(separatedBy: "\n")
-        let paneLineObjects = lines.enumerated().map { idx, text in
-            PaneLine(id: idx, text: text, lineType: classifyLine(text))
+        let types = classifyLines(lines)
+        let paneLineObjects = zip(lines, types).enumerated().map { idx, pair in
+            PaneLine(id: idx, text: pair.0, lineType: pair.1)
         }
         perTabLines[capturedIndex] = paneLineObjects
 
         // Notify parent of captured text (only for the visible tab)
         if capturedIndex == activeWindowIndex {
             onCapturedText?(lines.joined(separator: "\n"))
+        }
+        // Refresh the clickable prompt-option row on the active tab.
+        if capturedIndex == activeWindowIndex {
+            let opts = detectPromptOptions(paneLineObjects)
+            if opts != promptOptions {
+                promptOptions = opts
+            }
         }
     }
 }

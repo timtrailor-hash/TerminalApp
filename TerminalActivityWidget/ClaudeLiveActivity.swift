@@ -1,6 +1,99 @@
 import ActivityKit
+import AppIntents
+import Foundation
 import SwiftUI
 import WidgetKit
+
+@available(iOS 17.2, *)
+struct PromptChoiceIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Answer Claude Prompt"
+    static var description: IntentDescription? = IntentDescription(
+        "Sends a numbered choice to an active Claude Code permission prompt."
+    )
+
+    @Parameter(title: "Session Label")
+    var sessionLabel: String
+
+    @Parameter(title: "Option Number")
+    var number: Int
+
+    @Parameter(title: "Server Base URL")
+    var serverBaseURL: String
+
+    init() {
+        self.sessionLabel = ""
+        self.number = 0
+        self.serverBaseURL = ""
+    }
+
+    init(sessionLabel: String, number: Int, serverBaseURL: String) {
+        self.sessionLabel = sessionLabel
+        self.number = number
+        self.serverBaseURL = serverBaseURL
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard !serverBaseURL.isEmpty,
+              let url = URL(string: "\(serverBaseURL)/internal/prompt-choice") else {
+            return .result()
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 5
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "session_label": sessionLabel,
+            "number": number,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
+        return .result()
+    }
+}
+
+
+@available(iOS 17.2, *)
+private struct PromptOptionButtons: View {
+    let state: ClaudeActivityAttributes.ContentState
+    let attributes: ClaudeActivityAttributes
+    let compact: Bool  // compact = inline in dynamic island, else lock-screen
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+            ForEach(state.options) { opt in
+                Button(intent: PromptChoiceIntent(
+                    sessionLabel: attributes.sessionLabel,
+                    number: opt.number,
+                    serverBaseURL: state.serverBaseURL
+                )) {
+                    HStack(spacing: 6) {
+                        Text("\(opt.number)")
+                            .font(.caption.bold().monospacedDigit())
+                            .foregroundColor(.green)
+                        Text(opt.label)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.white.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(Color.green.opacity(0.45), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
 
 struct ClaudeLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -23,18 +116,36 @@ struct ClaudeLiveActivity: Widget {
                     PhaseTrailingView(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(context.state.headline)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(context.state.headline)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if #available(iOS 17.2, *), !context.state.options.isEmpty {
+                            PromptOptionButtons(state: context.state,
+                                                attributes: context.attributes,
+                                                compact: true)
+                        }
+                    }
                 }
             } compactLeading: {
                 Image(systemName: "terminal.fill")
                     .foregroundColor(.green)
             } compactTrailing: {
-                PhaseCompactTrailingView(state: context.state)
+                HStack(spacing: 3) {
+                    if context.state.phase == .thinking {
+                        Text(timerInterval: context.state.startedAt...Date.distantFuture,
+                             countsDown: false,
+                             showsHours: false)
+                            .font(.caption2.monospacedDigit().weight(.medium))
+                            .foregroundColor(.green)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 38)
+                    }
+                    PhaseCompactTrailingView(state: context.state)
+                }
             } minimal: {
                 PhaseMinimalView(state: context.state)
             }
@@ -83,6 +194,10 @@ private struct LockScreenView: View {
                     .lineLimit(6)
                     .multilineTextAlignment(.leading)
             }
+            if #available(iOS 17.2, *), !state.options.isEmpty {
+                PromptOptionButtons(state: state, attributes: attributes, compact: false)
+                    .padding(.top, 2)
+            }
             Text(attributes.sessionLabel.uppercased())
                 .font(.caption2.weight(.semibold))
                 .foregroundColor(.green.opacity(0.8))
@@ -98,7 +213,10 @@ private struct PhaseBadge: View {
         switch phase {
         case .thinking:
             HStack(spacing: 4) {
-                ProgressView().controlSize(.mini).tint(.green)
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+                    .tint(.green)
                 Text("Working")
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(.green)
@@ -126,11 +244,19 @@ private struct PhaseTrailingView: View {
     var body: some View {
         switch state.phase {
         case .thinking:
-            Text(timerInterval: state.startedAt...Date.distantFuture,
-                 countsDown: false)
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.green)
-                .frame(maxWidth: 60)
+            HStack(spacing: 6) {
+                ProgressView(timerInterval: state.arcStartedAt...state.arcStartedAt.addingTimeInterval(60),
+                             countsDown: false,
+                             label: { EmptyView() },
+                             currentValueLabel: { EmptyView() })
+                    .progressViewStyle(.circular)
+                    .tint(.green)
+                Text(timerInterval: state.startedAt...Date.distantFuture,
+                     countsDown: false)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.green)
+                    .frame(maxWidth: 60)
+            }
         case .finished:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green)
@@ -146,7 +272,17 @@ private struct PhaseCompactTrailingView: View {
     var body: some View {
         switch state.phase {
         case .thinking:
-            ProgressView().controlSize(.mini).tint(.green)
+            // ProgressView(timerInterval:) is one of the few views iOS
+            // actually animates inside a Dynamic Island / Live Activity.
+            // Use a 5-minute sweep so the arc visibly fills while Claude
+            // thinks. If thinking takes longer, the arc stays full — the
+            // timer text next to it tells the real story.
+            ProgressView(timerInterval: state.arcStartedAt...state.arcStartedAt.addingTimeInterval(60),
+                         countsDown: false,
+                         label: { EmptyView() },
+                         currentValueLabel: { EmptyView() })
+                .progressViewStyle(.circular)
+                .tint(.green)
         case .finished:
             Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
         case .error:
@@ -160,7 +296,12 @@ private struct PhaseMinimalView: View {
     var body: some View {
         switch state.phase {
         case .thinking:
-            Image(systemName: "hourglass").foregroundColor(.green)
+            ProgressView(timerInterval: state.arcStartedAt...state.arcStartedAt.addingTimeInterval(60),
+                         countsDown: false,
+                         label: { EmptyView() },
+                         currentValueLabel: { EmptyView() })
+                .progressViewStyle(.circular)
+                .tint(.green)
         case .finished:
             Image(systemName: "checkmark").foregroundColor(.green)
         case .error:
