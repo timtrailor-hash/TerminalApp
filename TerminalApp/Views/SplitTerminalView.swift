@@ -147,12 +147,6 @@ struct SplitTerminalView: View {
     /// when the closure captured a stale struct.
     @State private var pollTarget: Int = 0
 
-    /// Monotonic tick counter for the poll loop, used by the debug HUD
-    /// so the user can visually confirm the loop is alive.
-    @State private var pollTickCount: Int = 0
-    @State private var lastPollAt: Date = .distantPast
-    @State private var lastCaptureLen: Int = 0
-
     // Last pane size we told the server about. The server defaults to 80x23 which
     // is way wider than the iPhone's ~48-col display, so Claude Code CLI wraps
     // its TUI at 78 and we then re-wrap visually → mid-paragraph breaks. We
@@ -556,26 +550,7 @@ struct SplitTerminalView: View {
         return result
     }
 
-    /// Debug HUD — tiny badge at top-right showing polling state so the
-    /// user can visually confirm the loop is alive and targeting the
-    /// right tab. Remove once the refresh issue is confirmed fixed.
-    private var debugHUD: some View {
-        let age = lastPollAt == .distantPast
-            ? "—"
-            : String(format: "%.1fs", Date().timeIntervalSince(lastPollAt))
-        return Text("t\(pollTickCount) w\(pollTarget) a\(age) L\(lastCaptureLen)")
-            .font(.system(size: 9, design: .monospaced))
-            .foregroundColor(.yellow.opacity(0.7))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.black.opacity(0.4))
-            .cornerRadius(4)
-            .padding(.top, 2)
-            .padding(.trailing, 6)
-    }
-
     private var outputSection: some View {
-        ZStack(alignment: .topTrailing) {
         Group {
             if paneLines.isEmpty {
                 VStack(alignment: .leading) {
@@ -598,8 +573,6 @@ struct SplitTerminalView: View {
             }
         }
         .background(AppTheme.background)
-            debugHUD
-        }
     }
 
     // MARK: - Color coding
@@ -889,14 +862,10 @@ struct SplitTerminalView: View {
         // a shared backing store, so stale struct captures still read
         // current values.
         let capturedIndex = pollTarget
-        pollTickCount &+= 1
-        lastPollAt = Date()
-        splitLog.info("refreshPane: tick=\(pollTickCount) window=\(capturedIndex) fastPoll=\(Date() < fastPollUntil)")
         guard let content = await httpCaptureTmux(window: capturedIndex) else {
-            splitLog.warning("refreshPane: capture FAILED for window \(capturedIndex)")
+            splitLog.debug("refreshPane: capture failed for window \(capturedIndex)")
             return
         }
-        lastCaptureLen = content.count
 
         hasLoadedOnce = true
 
@@ -912,14 +881,11 @@ struct SplitTerminalView: View {
                 PaneLine(id: idx, text: pair.0, lineType: pair.1)
             }
             perTabLines[capturedIndex] = paneLineObjects
-            splitLog.info("refreshPane: window=\(capturedIndex) CHANGED, \(lines.count) lines, len=\(content.count)")
 
             // Notify parent of captured text (only for the visible tab)
             if capturedIndex == pollTarget {
                 onCapturedText?(lines.joined(separator: "\n"))
             }
-        } else {
-            splitLog.debug("refreshPane: window=\(capturedIndex) hash unchanged (prev=\(prev), len=\(content.count))")
         }
 
         // Always re-run prompt-option detection on the active tab — even when
