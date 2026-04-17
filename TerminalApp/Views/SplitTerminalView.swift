@@ -233,7 +233,16 @@ struct SplitTerminalView: View {
         // on each Text row). Subtract both sides before dividing by cell width.
         let usableWidth = max(outputSize.width - 16, 0)
         let cols = max(20, Int(floor(usableWidth / Self.outputFontCellWidth)))
-        let rows = max(10, Int(floor(outputSize.height / Self.outputFontLineHeight)))
+        // Use a STABLE row count based on screen height, not the current
+        // pane height. When the keyboard opens, outputSize.height shrinks
+        // → we'd push a smaller row count → SIGWINCH → every TUI running
+        // in the pane (zsh, Claude Code) redraws → the pre-resize UI
+        // lands in scrollback → pane shows duplicate banners/prompts.
+        // Peg rows to the full screen so keyboard show/hide doesn't
+        // trigger resize churn.
+        let screen = UIScreen.main.bounds.size
+        let referenceHeight = max(screen.height, screen.width) * 0.68
+        let rows = max(10, Int(floor(referenceHeight / Self.outputFontLineHeight)))
         if cols == lastPushedCols && rows == lastPushedRows { return }
         lastPushedCols = cols
         lastPushedRows = rows
