@@ -304,8 +304,18 @@ struct SplitTerminalView: View {
                     .frame(height: geo.size.height * 0.32)
             }
             .onAppear { updateTmuxPaneSize(outputSize: outputSize) }
-            .onChange(of: outputSize) { _, newSize in
-                updateTmuxPaneSize(outputSize: newSize)
+            // onChange fires on every SwiftUI layout pass — during initial
+            // mount of a new tab that's 3-4 calls with slightly different
+            // sizes. Each one that differs (even by 1 col) sends another
+            // /tmux-resize → another SIGWINCH → another prompt/banner
+            // stamped into scrollback. We don't want that. Resize is only
+            // interesting when the user rotates the device, which
+            // changes UIScreen.main.bounds — hook that via orientation
+            // notification below rather than chasing SwiftUI layout wobble.
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIDevice.orientationDidChangeNotification
+            )) { _ in
+                updateTmuxPaneSize(outputSize: outputSize)
             }
         }
         .background(AppTheme.background)
