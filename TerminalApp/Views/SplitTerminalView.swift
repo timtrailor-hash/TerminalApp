@@ -102,9 +102,32 @@ struct SplitTerminalView: View {
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
-    @State private var perTabInput: [Int: String] = [:]
+    // Drafts survive app suspension / termination (phone lock, backgrounding,
+    // iOS eviction). Without persistence, @State is wiped when the app
+    // process dies and the user loses typed-but-unsent prompts.
+    @State private var perTabInput: [Int: String] = SplitTerminalView.loadDrafts()
     @State private var perTabPaneHash: [Int: Int] = [:]
     @State private var hasLoadedOnce: Bool = false
+
+    private static let draftsDefaultsKey = "SplitTerminalView.perTabInputDrafts.v1"
+
+    private static func loadDrafts() -> [Int: String] {
+        guard let data = UserDefaults.standard.data(forKey: draftsDefaultsKey),
+              let dict = try? JSONDecoder().decode([Int: String].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    private func saveDrafts() {
+        let nonEmpty = perTabInput.filter { !$0.value.isEmpty }
+        if nonEmpty.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.draftsDefaultsKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(nonEmpty) {
+            UserDefaults.standard.set(data, forKey: Self.draftsDefaultsKey)
+        }
+    }
 
     private var paneLines: [PaneLine] {
         perTabLines[activeWindowIndex] ?? []
@@ -216,7 +239,10 @@ struct SplitTerminalView: View {
     private var inputText: Binding<String> {
         Binding(
             get: { perTabInput[activeWindowIndex] ?? "" },
-            set: { perTabInput[activeWindowIndex] = $0 }
+            set: {
+                perTabInput[activeWindowIndex] = $0
+                saveDrafts()
+            }
         )
     }
 
@@ -728,6 +754,7 @@ struct SplitTerminalView: View {
         let textToSend = text
         let window = activeWindowIndex
         perTabInput[activeWindowIndex] = ""
+        saveDrafts()
         isUserScrolledUp = false // auto-scroll to see response
 
         // Kick a local Live Activity scoped to THIS tab (mobile-<windowIndex>)
