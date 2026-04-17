@@ -237,6 +237,11 @@ struct SplitTerminalView: View {
         if cols == lastPushedCols && rows == lastPushedRows { return }
         lastPushedCols = cols
         lastPushedRows = rows
+        // Stash for createTmuxWindow in TerminalView so it can create the
+        // window at the right size from the start (avoids zsh redrawing
+        // its prompt on SIGWINCH and leaving stale prompts in scrollback).
+        UserDefaults.standard.set(cols, forKey: "TerminalApp.lastPaneCols")
+        UserDefaults.standard.set(rows, forKey: "TerminalApp.lastPaneRows")
         Task {
             await httpTmuxResize(cols: cols, rows: rows)
             // Immediately refetch so the user sees reflowed content without waiting

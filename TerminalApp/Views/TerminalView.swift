@@ -471,7 +471,19 @@ struct TerminalView: View {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = "{}".data(using: .utf8)
+        // Tell the server to create the window at the pane's current
+        // dimensions. If we let tmux default to 80x24 and resize
+        // afterward, zsh redraws its prompt on SIGWINCH and leaves the
+        // pre-resize prompt in scrollback — the pane then shows
+        // duplicate "%" prompt lines (2026-04-17 bug).
+        let cols = UserDefaults.standard.integer(forKey: "TerminalApp.lastPaneCols")
+        let rows = UserDefaults.standard.integer(forKey: "TerminalApp.lastPaneRows")
+        var body: [String: Any] = [:]
+        if cols >= 20 && rows >= 5 {
+            body["cols"] = cols
+            body["rows"] = rows
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         URLSession.shared.dataTask(with: request) { data, _, _ in
             // Read the new window index from the server so we can switch to
             // it immediately. Without this, activeWindowIndex stays on the
