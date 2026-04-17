@@ -573,6 +573,18 @@ struct TerminalView: View {
                     activeWindowIndex = active.index
                     hasSyncedInitialWindow = true
                 }
+                // If our current activeWindowIndex no longer exists (the
+                // user just killed that tab), snap to whichever window
+                // tmux now reports as active — otherwise the pane keeps
+                // polling a dead window and the tab bar's orange
+                // selection drifts out of sync with the displayed pane.
+                else if !windows.contains(where: { $0.index == activeWindowIndex }) {
+                    if let active = windows.first(where: { $0.active }) {
+                        activeWindowIndex = active.index
+                    } else if let first = windows.first {
+                        activeWindowIndex = first.index
+                    }
+                }
             }
         }.resume()
     }
