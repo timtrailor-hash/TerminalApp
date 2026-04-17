@@ -138,6 +138,21 @@ struct SplitTerminalView: View {
     @State private var isUserScrolledUp = false
     @FocusState private var inputFocused: Bool
 
+    /// @State mirror of `activeWindowIndex`. The parent passes
+    /// `activeWindowIndex` as a plain `let`, which means each time the
+    /// parent rebuilds SplitTerminalView (e.g. on tab change) the struct
+    /// instance captured by long-lived closures (like the polling Task)
+    /// keeps reading the OLD value. Reads through `@State` always go to
+    /// the shared backing store, so they reflect the latest value even
+    /// when the closure captured a stale struct.
+    @State private var pollTarget: Int = 0
+
+    /// Monotonic tick counter for the poll loop, used by the debug HUD
+    /// so the user can visually confirm the loop is alive.
+    @State private var pollTickCount: Int = 0
+    @State private var lastPollAt: Date = .distantPast
+    @State private var lastCaptureLen: Int = 0
+
     // Last pane size we told the server about. The server defaults to 80x23 which
     // is way wider than the iPhone's ~48-col display, so Claude Code CLI wraps
     // its TUI at 78 and we then re-wrap visually → mid-paragraph breaks. We
@@ -286,11 +301,18 @@ struct SplitTerminalView: View {
             }
         }
         .background(AppTheme.background)
-        .onAppear { startPolling() }
+        .onAppear {
+            pollTarget = activeWindowIndex
+            startPolling()
+        }
         .onDisappear { stopPolling() }
         .onChange(of: activeWindowIndex) { _, newIndex in
             // Keep per-tab cached content; just refresh in background.
             isUserScrolledUp = false
+            // Update the @State mirror so the polling Task (which captured
+            // the initial struct and therefore reads the stale `let
+            // activeWindowIndex`) picks up the new tab on its next tick.
+            pollTarget = newIndex
             // `promptOptions` is view-scoped (not per-tab). Re-evaluate it
             // against the new tab's cached lines immediately so the previous
             // tab's button row doesn't flash on this one while refreshPane is
@@ -534,7 +556,26 @@ struct SplitTerminalView: View {
         return result
     }
 
+    /// Debug HUD — tiny badge at top-right showing polling state so the
+    /// user can visually confirm the loop is alive and targeting the
+    /// right tab. Remove once the refresh issue is confirmed fixed.
+    private var debugHUD: some View {
+        let age = lastPollAt == .distantPast
+            ? "—"
+            : String(format: "%.1fs", Date().timeIntervalSince(lastPollAt))
+        return Text("t\(pollTickCount) w\(pollTarget) a\(age) L\(lastCaptureLen)")
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundColor(.yellow.opacity(0.7))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.4))
+            .cornerRadius(4)
+            .padding(.top, 2)
+            .padding(.trailing, 6)
+    }
+
     private var outputSection: some View {
+        ZStack(alignment: .topTrailing) {
         Group {
             if paneLines.isEmpty {
                 VStack(alignment: .leading) {
@@ -557,6 +598,8 @@ struct SplitTerminalView: View {
             }
         }
         .background(AppTheme.background)
+            debugHUD
+        }
     }
 
     // MARK: - Color coding
@@ -839,11 +882,21 @@ struct SplitTerminalView: View {
     }
 
     private func refreshPane() async {
-        let capturedIndex = activeWindowIndex
+        // Read through `@State pollTarget`, NOT the `let activeWindowIndex`
+        // parameter. The polling Task captured the initial struct; its
+        // `self.activeWindowIndex` is frozen to whatever tab was active
+        // when startPolling ran, and never updates. @State goes through
+        // a shared backing store, so stale struct captures still read
+        // current values.
+        let capturedIndex = pollTarget
+        pollTickCount &+= 1
+        lastPollAt = Date()
+        splitLog.info("refreshPane: tick=\(pollTickCount) window=\(capturedIndex) fastPoll=\(Date() < fastPollUntil)")
         guard let content = await httpCaptureTmux(window: capturedIndex) else {
-            splitLog.debug("refreshPane: capture failed for window \(capturedIndex)")
+            splitLog.warning("refreshPane: capture FAILED for window \(capturedIndex)")
             return
         }
+        lastCaptureLen = content.count
 
         hasLoadedOnce = true
 
@@ -859,21 +912,21 @@ struct SplitTerminalView: View {
                 PaneLine(id: idx, text: pair.0, lineType: pair.1)
             }
             perTabLines[capturedIndex] = paneLineObjects
-            splitLog.info("refreshPane: window=\(capturedIndex) updated, \(lines.count) lines, fastPoll=\(Date() < fastPollUntil)")
+            splitLog.info("refreshPane: window=\(capturedIndex) CHANGED, \(lines.count) lines, len=\(content.count)")
 
             // Notify parent of captured text (only for the visible tab)
-            if capturedIndex == activeWindowIndex {
+            if capturedIndex == pollTarget {
                 onCapturedText?(lines.joined(separator: "\n"))
             }
         } else {
-            splitLog.debug("refreshPane: window=\(capturedIndex) hash unchanged, re-evaluating prompt options only")
+            splitLog.debug("refreshPane: window=\(capturedIndex) hash unchanged (prev=\(prev), len=\(content.count))")
         }
 
         // Always re-run prompt-option detection on the active tab — even when
         // the pane hash is unchanged — because `promptOptions` is view-scoped
         // (not per-tab) and can be left stale by a tab switch. Detection is
         // cheap (25-line walk).
-        if capturedIndex == activeWindowIndex {
+        if capturedIndex == pollTarget {
             let opts = detectPromptOptions(perTabLines[capturedIndex] ?? [])
             if opts != promptOptions {
                 promptOptions = opts
