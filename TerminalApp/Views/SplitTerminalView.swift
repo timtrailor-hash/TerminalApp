@@ -132,7 +132,7 @@ struct SplitTerminalView: View {
     private var paneLines: [PaneLine] {
         perTabLines[activeWindowIndex] ?? []
     }
-    @State private var pollTimer: Timer?
+    @State private var pollTask: Task<Void, Never>?
     @State private var isSending = false
     @State private var fastPollUntil: Date = .distantPast
     @State private var isUserScrolledUp = false
@@ -288,9 +288,15 @@ struct SplitTerminalView: View {
         .background(AppTheme.background)
         .onAppear { startPolling() }
         .onDisappear { stopPolling() }
-        .onChange(of: activeWindowIndex) { _, _ in
-            // Keep per-tab cached content; just refresh in background
+        .onChange(of: activeWindowIndex) { _, newIndex in
+            // Keep per-tab cached content; just refresh in background.
             isUserScrolledUp = false
+            // `promptOptions` is view-scoped (not per-tab). Re-evaluate it
+            // against the new tab's cached lines immediately so the previous
+            // tab's button row doesn't flash on this one while refreshPane is
+            // in flight. If the new tab's cache is empty, this harmlessly
+            // clears; refreshPane will fill it in.
+            promptOptions = detectPromptOptions(perTabLines[newIndex] ?? [])
             Task { await refreshPane() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .paneRefreshRequested)) { note in
@@ -755,6 +761,11 @@ struct SplitTerminalView: View {
         let window = activeWindowIndex
         perTabInput[activeWindowIndex] = ""
         saveDrafts()
+        // Submitting any text resolves whatever prompt the buttons belonged to
+        // (either CC consumes the keys as a permission response, or the user
+        // has moved past the prompt). Clear optimistically so the button row
+        // disappears immediately instead of waiting for the next poll.
+        promptOptions = []
         isUserScrolledUp = false // auto-scroll to see response
 
         // Kick a local Live Activity scoped to THIS tab (mobile-<windowIndex>)
@@ -805,50 +816,65 @@ struct SplitTerminalView: View {
 
     private func startPolling() {
         stopPolling()
-        // RunLoop .common so the tick survives scrolling + keyboard input.
-        // The .default mode (what scheduledTimer uses) gets starved during
-        // UITextView interaction, leaving the pane stale until the user
-        // switches tabs and switches back — which was the whole symptom.
-        let t = Timer(timeInterval: 1.5, repeats: true) { _ in
-            Task { @MainActor in
+        // Structured async loop instead of a RunLoop Timer. Timers on
+        // RunLoop.main — even in .common mode — were still going silent on
+        // device, leaving the pane stale until a view-lifecycle event
+        // (tab switch / app foreground) forced a refresh. Task.sleep uses
+        // the cooperative scheduler, not RunLoop, so it can't be starved
+        // by UIKit interactions. iOS still suspends the task when the app
+        // backgrounds; onAppear restarts it.
+        pollTask = Task { @MainActor in
+            while !Task.isCancelled {
                 await refreshPane()
+                let ns: UInt64 = (Date() < fastPollUntil) ? 400_000_000 : 1_500_000_000
+                try? await Task.sleep(nanoseconds: ns)
             }
         }
-        RunLoop.main.add(t, forMode: .common)
-        pollTimer = t
-        Task { await refreshPane() }
-        splitLog.info("Polling started")
+        splitLog.info("Polling started (async loop; 400ms fast / 1.5s idle)")
     }
 
     private func stopPolling() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     private func refreshPane() async {
         let capturedIndex = activeWindowIndex
-        guard let content = await httpCaptureTmux(window: capturedIndex) else { return }
+        guard let content = await httpCaptureTmux(window: capturedIndex) else {
+            splitLog.debug("refreshPane: capture failed for window \(capturedIndex)")
+            return
+        }
 
         hasLoadedOnce = true
 
         let hash = content.hashValue
-        guard hash != (perTabPaneHash[capturedIndex] ?? 0) else { return }
-        perTabPaneHash[capturedIndex] = hash
+        let prev = perTabPaneHash[capturedIndex] ?? 0
+        let contentChanged = hash != prev
 
-        let lines = content.components(separatedBy: "\n")
-        let types = classifyLines(lines)
-        let paneLineObjects = zip(lines, types).enumerated().map { idx, pair in
-            PaneLine(id: idx, text: pair.0, lineType: pair.1)
-        }
-        perTabLines[capturedIndex] = paneLineObjects
+        if contentChanged {
+            perTabPaneHash[capturedIndex] = hash
+            let lines = content.components(separatedBy: "\n")
+            let types = classifyLines(lines)
+            let paneLineObjects = zip(lines, types).enumerated().map { idx, pair in
+                PaneLine(id: idx, text: pair.0, lineType: pair.1)
+            }
+            perTabLines[capturedIndex] = paneLineObjects
+            splitLog.info("refreshPane: window=\(capturedIndex) updated, \(lines.count) lines, fastPoll=\(Date() < fastPollUntil)")
 
-        // Notify parent of captured text (only for the visible tab)
-        if capturedIndex == activeWindowIndex {
-            onCapturedText?(lines.joined(separator: "\n"))
+            // Notify parent of captured text (only for the visible tab)
+            if capturedIndex == activeWindowIndex {
+                onCapturedText?(lines.joined(separator: "\n"))
+            }
+        } else {
+            splitLog.debug("refreshPane: window=\(capturedIndex) hash unchanged, re-evaluating prompt options only")
         }
-        // Refresh the clickable prompt-option row on the active tab.
+
+        // Always re-run prompt-option detection on the active tab — even when
+        // the pane hash is unchanged — because `promptOptions` is view-scoped
+        // (not per-tab) and can be left stale by a tab switch. Detection is
+        // cheap (25-line walk).
         if capturedIndex == activeWindowIndex {
-            let opts = detectPromptOptions(paneLineObjects)
+            let opts = detectPromptOptions(perTabLines[capturedIndex] ?? [])
             if opts != promptOptions {
                 promptOptions = opts
             }
