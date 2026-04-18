@@ -68,6 +68,25 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         )
         UNUserNotificationCenter.current().setNotificationCategories([proposalCategory])
 
+        // End any orphan Live Activities left over from a prior run. The
+        // server's push-to-start path creates a fresh LA on every turn when
+        // it doesn't know about an existing one; if the app was backgrounded
+        // when those event=start pushes landed, iOS created the LAs but
+        // never got a chance to register the activity-tokens back to the
+        // server. Result: Dynamic Island stuck showing "working" for an LA
+        // nobody (server or app) can drive. Wipe them here — the server
+        // will re-push event=start for any genuinely-active turn on the
+        // next cycle.
+        Task {
+            let active = Activity<ClaudeActivityAttributes>.activities
+            if !active.isEmpty {
+                print("[AppLaunch] ending \(active.count) leftover Live Activit(ies)")
+                for activity in active {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                }
+            }
+        }
+
         // Request permission and register for remote notifications
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if granted {
