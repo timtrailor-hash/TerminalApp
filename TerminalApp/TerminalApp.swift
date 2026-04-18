@@ -42,6 +42,32 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
 
+        // Register actionable-notification category so alert-responder
+        // proposals show Accept / Reject / Discuss buttons directly on the
+        // lock-screen banner, not just inside the app.
+        let acceptAction = UNNotificationAction(
+            identifier: "PROPOSAL_ACCEPT",
+            title: "Accept",
+            options: [.authenticationRequired]
+        )
+        let rejectAction = UNNotificationAction(
+            identifier: "PROPOSAL_REJECT",
+            title: "Reject",
+            options: [.destructive]
+        )
+        let discussAction = UNNotificationAction(
+            identifier: "PROPOSAL_DISCUSS",
+            title: "Discuss",
+            options: [.foreground]
+        )
+        let proposalCategory = UNNotificationCategory(
+            identifier: "PROPOSAL_ACTIONS",
+            actions: [acceptAction, rejectAction, discussAction],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([proposalCategory])
+
         // Request permission and register for remote notifications
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if granted {
@@ -133,10 +159,55 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     // Tap on a delivered notification → deep-link to its tab.
+    // Actionable-button taps on a proposal notification → POST the action
+    // to the alert-responder endpoint so it fires even when the app is
+    // still in the background (user never opens the tab).
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
+        let actionId = response.actionIdentifier
+
+        // Map the iOS-side action identifier to the server-side action verb.
+        let proposalAction: String? = {
+            switch actionId {
+            case "PROPOSAL_ACCEPT":  return "accept"
+            case "PROPOSAL_REJECT":  return "reject"
+            case "PROPOSAL_DISCUSS": return "discuss"
+            default: return nil
+            }
+        }()
+
+        if let action = proposalAction,
+           let alertId = info["alert_id"] as? String,
+           let server = self.server,
+           let url = URL(string: "\(server.baseURL)/internal/proposal-action/\(alertId)/\(action)") {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !server.authToken.isEmpty {
+                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+            }
+            req.httpBody = try? JSONSerialization.data(
+                withJSONObject: ["source": "push-action"]
+            )
+            URLSession.shared.dataTask(with: req) { _, _, error in
+                if let error = error {
+                    print("Proposal action POST failed: \(error)")
+                }
+                DispatchQueue.main.async { completionHandler() }
+            }.resume()
+            // For Discuss, we ALSO deep-link to the freshly-opened window
+            // so the user lands directly in the discussion tab.
+            if action == "discuss", let window = AppDelegate.windowIndex(from: info) {
+                NotificationCenter.default.post(name: .deepLinkToWindow,
+                                                object: nil,
+                                                userInfo: ["window": window])
+            }
+            return
+        }
+
+        // Default tap (not an actionable button) — deep-link to the tab.
         if let window = AppDelegate.windowIndex(from: info) {
             NotificationCenter.default.post(name: .deepLinkToWindow,
                                             object: nil,
