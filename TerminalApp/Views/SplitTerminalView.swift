@@ -446,15 +446,40 @@ struct SplitTerminalView: View {
         }
 
         var collected: [(Int, String)] = []
+        var anyActive = false
         for i in startIdx...endIdx {
             guard let parsed = parsePromptOptionLine(tail[i].text) else { return [] }
             collected.append(parsed)
+            if hasActiveSelector(tail[i].text) {
+                anyActive = true
+            }
         }
         guard collected.count >= 2 else { return [] }
         for (i, entry) in collected.enumerated() where entry.0 != i + 1 {
             return []
         }
+        // Second stale-detection gate: Claude Code puts `❯` on the currently-
+        // highlighted option while a prompt awaits input; dismissed prompts
+        // show every option bare. If no option in the block carries the
+        // selector, the prompt was dismissed and we're rendering scrollback.
+        // This catches the tick between "user answered" and "Crafting…
+        // appeared" that isWorkingIndicator alone can miss — the exact
+        // flicker Tim reported 2026-04-18 ("popping up and then going").
+        if !anyActive {
+            return []
+        }
         return collected.map { PromptOption(number: $0.0, label: $0.1) }
+    }
+
+    /// True if this line begins (after optional box-draw border) with the
+    /// active-selection marker Claude Code puts on the highlighted option.
+    private func hasActiveSelector(_ raw: String) -> Bool {
+        var t = raw.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("│") {
+            t = String(t.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        guard let first = t.first else { return false }
+        return first == "❯" || first == ">"
     }
 
     /// Lines allowed between the options block and the pane bottom without
