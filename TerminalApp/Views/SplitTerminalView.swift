@@ -388,6 +388,17 @@ struct SplitTerminalView: View {
     private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
         let tail = Array(lines.suffix(25))
 
+        // Dismiss immediately if Claude is visibly *working*. When a real
+        // prompt is active, Claude Code replaces the status footer with the
+        // prompt's own hints — "Crafting…" / "esc to interrupt" / thinking
+        // glyphs are never on screen at the same time as a live prompt.
+        // Without this gate, the walk-back treats "esc to interrupt" as
+        // chrome and resurfaces the previous prompt's options from
+        // scrollback, producing the spurious buttons Tim reported 2026-04-18.
+        if tail.contains(where: { isWorkingIndicator($0.text) }) {
+            return []
+        }
+
         // Walk bottom-up: skip chrome, find the first option line.
         var lastOptIdx: Int? = nil
         for i in stride(from: tail.count - 1, through: 0, by: -1) {
@@ -472,6 +483,34 @@ struct SplitTerminalView: View {
         // with content after it (like `❯ 2`) is real user input and should
         // disqualify the detection.
         if t == "❯" || t == ">" { return true }
+        return false
+    }
+
+    /// Indicators that Claude is currently working (not awaiting input).
+    /// When any of these are visible in the pane tail, a scrollback prompt
+    /// is stale — don't resurrect its buttons.
+    private func isWorkingIndicator(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return false }
+        let lower = t.lowercased()
+        // "esc to interrupt" is the unambiguous active-work footer.
+        if lower.contains("esc to interrupt") { return true }
+        // "Crafting…" appears mid-response; "thought for Ns" appears briefly
+        // at completion but before a new prompt.
+        if lower.contains("crafting") { return true }
+        if lower.contains("thinking") && (lower.contains("token") || lower.contains("thought for")) {
+            return true
+        }
+        // Claude Code's thinking spinner glyphs — presence of any of these
+        // in an otherwise non-chrome line signals ongoing work.
+        let spinnerGlyphs: [Character] = ["✢", "✶", "✽", "✳", "⚒", "✻"]
+        if spinnerGlyphs.contains(where: { t.contains($0) }) {
+            // Only treat as working if it's next to a time/tokens metric
+            // (guards against decorative glyphs inside rendered content).
+            if lower.contains("token") || lower.contains("s ·") || lower.contains("s |") {
+                return true
+            }
+        }
         return false
     }
 
