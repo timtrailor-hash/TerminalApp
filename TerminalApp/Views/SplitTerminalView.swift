@@ -102,6 +102,58 @@ struct SplitTerminalView: View {
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
+    @State private var lastLoggedReasonKey: String = ""
+
+    /// Every call to the prompt-option detector ends here. Logs the
+    /// transition (APPEAR/DISAPPEAR/CHANGE) with the reason code from the
+    /// detector to both os_log and the conversation-server /debug-log
+    /// endpoint. Dedup: the same (kind, reason, tab, options) does not
+    /// spam the log twice in a row. Tim 2026-04-18: "add some logging so
+    /// you can see every time they appear and every time they disappear
+    /// and why".
+    private func logButtonTransition(
+        prev: [PromptOption], next: [PromptOption],
+        reason: String, evidence: String, activeTab: Int
+    ) {
+        let kind: String
+        if prev.isEmpty && !next.isEmpty { kind = "APPEAR" }
+        else if !prev.isEmpty && next.isEmpty { kind = "DISAPPEAR" }
+        else if prev != next { kind = "CHANGE" }
+        else { return }
+        let key = "\(kind):\(reason):\(activeTab):\(next.map{String($0.number)}.joined(separator: ","))"
+        if key == lastLoggedReasonKey { return }
+        lastLoggedReasonKey = key
+        let prevDesc = prev.isEmpty ? "empty" : prev.map { "\($0.number).\($0.label)" }.joined(separator: ",")
+        let nextDesc = next.isEmpty ? "empty" : next.map { "\($0.number).\($0.label)" }.joined(separator: ",")
+        splitLog.info("[button] \(kind, privacy: .public) tab=\(activeTab) reason=\(reason, privacy: .public) prev=[\(prevDesc, privacy: .public)] next=[\(nextDesc, privacy: .public)]")
+        let baseURL = server.baseURL
+        Task.detached(priority: .utility) {
+            guard let url = URL(string: "\(baseURL)/debug-log") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let payload: [String: Any] = [
+                "ts": ISO8601DateFormatter().string(from: Date()),
+                "source": "SplitTerminalView.detectPromptOptions",
+                "kind": kind,
+                "tab": activeTab,
+                "reason": reason,
+                "prev": prevDesc,
+                "next": nextDesc,
+                "evidence": evidence,
+            ]
+            req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+            _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
+    /// Result of a single detector run — options PLUS reason code and
+    /// evidence string explaining the decision.
+    struct DetectResult: Equatable {
+        let options: [PromptOption]
+        let reason: String
+        let evidence: String
+    }
     // Drafts survive app suspension / termination (phone lock, backgrounding,
     // iOS eviction). Without persistence, @State is wiped when the app
     // process dies and the user loses typed-but-unsent prompts.
@@ -336,7 +388,12 @@ struct SplitTerminalView: View {
             // tab's button row doesn't flash on this one while refreshPane is
             // in flight. If the new tab's cache is empty, this harmlessly
             // clears; refreshPane will fill it in.
-            promptOptions = detectPromptOptions(perTabLines[newIndex] ?? [])
+            let tabResult = detectPromptOptionsWithReason(perTabLines[newIndex] ?? [])
+            let prevOpts = promptOptions
+            promptOptions = tabResult.options
+            logButtonTransition(prev: prevOpts, next: tabResult.options,
+                reason: "tab-switch/\(tabResult.reason)",
+                evidence: tabResult.evidence, activeTab: newIndex)
             Task { await refreshPane() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .paneRefreshRequested)) { note in
@@ -385,90 +442,77 @@ struct SplitTerminalView: View {
     ///      text, `❯ 2` etc) means the prompt has been dismissed and we
     ///      return empty so the clickable button row disappears.
     ///   3. At least 2 contiguous options numbered 1…N.
-    private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
+    private func detectPromptOptionsWithReason(_ lines: [PaneLine]) -> DetectResult {
         let tail = Array(lines.suffix(25))
+        let tailSample = tail.suffix(6).map { $0.text }.joined(separator: " | ")
 
-        // Dismiss immediately if Claude is visibly *working*. When a real
-        // prompt is active, Claude Code replaces the status footer with the
-        // prompt's own hints — "Crafting…" / "esc to interrupt" / thinking
-        // glyphs are never on screen at the same time as a live prompt.
-        // Without this gate, the walk-back treats "esc to interrupt" as
-        // chrome and resurfaces the previous prompt's options from
-        // scrollback, producing the spurious buttons Tim reported 2026-04-18.
-        if tail.contains(where: { isWorkingIndicator($0.text) }) {
-            return []
+        if let w = tail.first(where: { isWorkingIndicator($0.text) }) {
+            return DetectResult(options: [], reason: "working-indicator",
+                evidence: "matched='\(w.text.prefix(60))' tail=[\(tailSample)]")
         }
 
-        // Walk bottom-up: skip chrome, find the first option line.
         var lastOptIdx: Int? = nil
         for i in stride(from: tail.count - 1, through: 0, by: -1) {
             let raw = tail[i].text
             if parsePromptOptionLine(raw) != nil {
-                lastOptIdx = i
-                break
+                lastOptIdx = i; break
             }
             if !isPromptChromeLine(raw) {
-                // Could be a wrapped continuation of a multi-line option
-                // label (e.g. "  this session" wrapping from option 2).
-                // If the line is indented (>= 4 spaces) and doesn't start
-                // with a number, treat it as chrome and keep walking.
                 let trimmed = raw.trimmingCharacters(in: .whitespaces)
                 let leadingSpaces = raw.prefix(while: { $0 == " " }).count
-                let looksLikeContinuation = leadingSpaces >= 4
-                    && !trimmed.isEmpty
-                    && !(trimmed.first?.isNumber ?? false)
-                if looksLikeContinuation {
+                if leadingSpaces >= 4 && !trimmed.isEmpty && !(trimmed.first?.isNumber ?? false) {
                     continue
                 }
-                return []   // substantive line below — prompt is dismissed
+                return DetectResult(options: [], reason: "substantive-line-below",
+                    evidence: "aborted-at='\(raw.prefix(60))' tail=[\(tailSample)]")
             }
         }
-        guard let endIdx = lastOptIdx else { return [] }
+        guard let endIdx = lastOptIdx else {
+            return DetectResult(options: [], reason: "no-option-lines-in-tail",
+                evidence: "tail=[\(tailSample)]")
+        }
 
-        // Walk upward collecting the contiguous options block.
-        // Skip wrapped continuation lines (indented, no number prefix)
-        // between option lines.
         var startIdx = endIdx
         while startIdx > 0 {
             let prevText = tail[startIdx - 1].text
-            if parsePromptOptionLine(prevText) != nil {
-                startIdx -= 1
-                continue
-            }
-            // Wrapped continuation of a multi-line option label?
+            if parsePromptOptionLine(prevText) != nil { startIdx -= 1; continue }
             let trimmed = prevText.trimmingCharacters(in: .whitespaces)
             let leadingSpaces = prevText.prefix(while: { $0 == " " }).count
             if leadingSpaces >= 4 && !trimmed.isEmpty && !(trimmed.first?.isNumber ?? false) {
-                startIdx -= 1
-                continue
+                startIdx -= 1; continue
             }
             break
         }
 
         var collected: [(Int, String)] = []
         var anyActive = false
+        var activeLine = ""
         for i in startIdx...endIdx {
-            guard let parsed = parsePromptOptionLine(tail[i].text) else { return [] }
-            collected.append(parsed)
-            if hasActiveSelector(tail[i].text) {
-                anyActive = true
+            guard let parsed = parsePromptOptionLine(tail[i].text) else {
+                return DetectResult(options: [], reason: "unparseable-option-in-block",
+                    evidence: "failed='\(tail[i].text.prefix(60))'")
             }
+            collected.append(parsed)
+            if hasActiveSelector(tail[i].text) { anyActive = true; activeLine = tail[i].text }
         }
-        guard collected.count >= 2 else { return [] }
+        guard collected.count >= 2 else {
+            return DetectResult(options: [], reason: "too-few-options-\(collected.count)", evidence: "")
+        }
         for (i, entry) in collected.enumerated() where entry.0 != i + 1 {
-            return []
+            return DetectResult(options: [], reason: "non-contiguous-numbering",
+                evidence: "collected=\(collected.map{"\($0.0).\($0.1)"}.joined(separator: ", "))")
         }
-        // Second stale-detection gate: Claude Code puts `❯` on the currently-
-        // highlighted option while a prompt awaits input; dismissed prompts
-        // show every option bare. If no option in the block carries the
-        // selector, the prompt was dismissed and we're rendering scrollback.
-        // This catches the tick between "user answered" and "Crafting…
-        // appeared" that isWorkingIndicator alone can miss — the exact
-        // flicker Tim reported 2026-04-18 ("popping up and then going").
         if !anyActive {
-            return []
+            return DetectResult(options: [], reason: "no-active-selector",
+                evidence: "collected=\(collected.map{"\($0.0).\($0.1)"}.joined(separator: ", ")) tail=[\(tailSample)]")
         }
-        return collected.map { PromptOption(number: $0.0, label: $0.1) }
+        let opts = collected.map { PromptOption(number: $0.0, label: $0.1) }
+        return DetectResult(options: opts, reason: "active-prompt",
+            evidence: "selector-on='\(activeLine.prefix(60))'")
+    }
+
+    private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
+        return detectPromptOptionsWithReason(lines).options
     }
 
     /// True if this line begins (after optional box-draw border) with the
@@ -981,10 +1025,14 @@ struct SplitTerminalView: View {
         // (not per-tab) and can be left stale by a tab switch. Detection is
         // cheap (25-line walk).
         if capturedIndex == pollTarget {
-            let opts = detectPromptOptions(perTabLines[capturedIndex] ?? [])
-            if opts != promptOptions {
-                promptOptions = opts
+            let result = detectPromptOptionsWithReason(perTabLines[capturedIndex] ?? [])
+            let prevOpts = promptOptions
+            if result.options != promptOptions {
+                promptOptions = result.options
             }
+            logButtonTransition(prev: prevOpts, next: result.options,
+                reason: "poll/\(result.reason)",
+                evidence: result.evidence, activeTab: capturedIndex)
         }
     }
 }
