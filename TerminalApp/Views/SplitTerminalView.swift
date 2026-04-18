@@ -149,7 +149,9 @@ struct SplitTerminalView: View {
 
     /// Result of a single detector run — options PLUS reason code and
     /// evidence string explaining the decision.
-    struct DetectResult: Equatable {
+    /// Must be `private` (same level as `PromptOption`) so Swift's
+    /// access-control rule is satisfied.
+    private struct DetectResult: Equatable {
         let options: [PromptOption]
         let reason: String
         let evidence: String
