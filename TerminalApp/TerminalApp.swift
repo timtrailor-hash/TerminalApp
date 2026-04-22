@@ -226,6 +226,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             return
         }
 
+        // URL push tap — open the URL in Safari directly. Server sends
+        // `url` in userInfo when Claude printed a link Tim should visit
+        // (device codes, OAuth consent pages, etc). Avoids the copy-paste
+        // dance caused by terminal line wrapping.
+        if let urlString = info["url"] as? String,
+           let targetURL = URL(string: urlString) {
+            UIApplication.shared.open(targetURL, options: [:]) { _ in
+                completionHandler()
+            }
+            return
+        }
+
         // Default tap (not an actionable button) — deep-link to the tab.
         if let window = AppDelegate.windowIndex(from: info) {
             NotificationCenter.default.post(name: .deepLinkToWindow,
