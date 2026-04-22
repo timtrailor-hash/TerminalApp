@@ -98,7 +98,19 @@ struct SplitTerminalView: View {
     /// fixed Yes/Allow/No buttons without any pane-text parsing.
     var pendingApproval: Bool = false
     var pendingToolName: String = ""
+    /// Monotonic counter from /tmux-windows. Bar is shown when
+    /// pendingApproval is true AND promptId > lastAnsweredPromptId.
+    /// Server increments this each time a fresh prompt opens so a tap
+    /// answering the previous prompt doesn't pollute the next one.
+    var promptId: Int = 0
     var onCapturedText: ((String) -> Void)?
+
+    /// Highest promptId the user has already answered. Bar stays hidden
+    /// while `promptId <= lastAnsweredPromptId` — prevents the "tap
+    /// approves old prompt, new prompt has same buttons, looks stuck"
+    /// visual glitch and the "tap lands as a digit in the text buffer
+    /// when no prompt is live" pollution that caused the 22 situation.
+    @State private var lastAnsweredPromptId: Int = 0
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
@@ -622,34 +634,59 @@ struct SplitTerminalView: View {
 
     private func sendPromptChoice(_ number: Int) {
         let window = activeWindowIndex
-        // Clear the visible buttons optimistically so a rapid double-tap
-        // can't fire two sends.
+        // Bump lastAnsweredPromptId optimistically so the bar hides instantly
+        // on tap (can't re-render the same prompt's buttons before the
+        // next poll). If the server rejects the tap as stale (HTTP 409),
+        // revert so the bar returns and the user can tap the real prompt.
+        let answeredId = promptId
         promptOptions = []
+        let previousAnswered = lastAnsweredPromptId
+        lastAnsweredPromptId = max(lastAnsweredPromptId, answeredId)
         Task {
-            // Send just the digit as a bare keystroke via /tmux-send-key.
-            // Claude Code's prompt handlers (permission + survey) read
-            // single key-presses, not text+enter. Using paste-buffer +
-            // enter would bypass the handler and land in Claude's normal
-            // input prompt instead.
-            await httpSendKey("\(number)", window: window)
+            // Send the digit + promptId. Server validates promptId against
+            // its current tracker and rejects with 409 if stale —
+            // prevents the "digit-lands-in-text-buffer" pollution that
+            // happened before this fix.
+            let accepted = await httpSendKey("\(number)", window: window, promptId: answeredId)
+            if !accepted {
+                // Tap was stale. Undo the optimistic hide so the bar
+                // comes back and the user sees the current prompt.
+                await MainActor.run {
+                    lastAnsweredPromptId = previousAnswered
+                }
+            }
             fastPollUntil = Date().addingTimeInterval(10)
             await refreshPane()
         }
     }
 
-    private func httpSendKey(_ key: String, window: Int) async {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-key") else { return }
+    /// Returns true if the server accepted the keystroke (200 OK).
+    /// Returns false on 409 stale-guard rejection so the caller can
+    /// revert its optimistic hide.
+    private func httpSendKey(_ key: String, window: Int, promptId: Int = 0) async -> Bool {
+        guard let url = URL(string: "\(server.baseURL)/tmux-send-key") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !server.authToken.isEmpty {
             request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
         }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "window": window,
-            "key": key,
-        ])
-        _ = try? await URLSession.shared.data(for: request)
+        var body: [String: Any] = ["window": window, "key": key]
+        if promptId > 0 { body["promptId"] = promptId }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                if http.statusCode == 409 {
+                    splitLog.info("[button] tap rejected as stale (promptId=\(promptId))")
+                    return false
+                }
+                return http.statusCode < 400
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func uiColorFor(_ type: LineType) -> UIColor {
@@ -808,8 +845,14 @@ struct SplitTerminalView: View {
 
     /// Primary: JSONL-based approval detection (deterministic, no text parsing).
     /// Fallback: pane-text-based detection (for surveys, non-standard prompts).
+    ///
+    /// Gate on `promptId > lastAnsweredPromptId` so once you've tapped an
+    /// answer the bar hides until the server announces a genuinely-new
+    /// prompt with a higher id. Without this gate the bar appeared
+    /// continuously through every back-to-back Bash-permission ask and
+    /// taps that missed the active prompt landed as digits in the input.
     private var effectivePromptOptions: [PromptOption] {
-        if pendingApproval {
+        if pendingApproval && promptId > lastAnsweredPromptId {
             return [
                 PromptOption(number: 1, label: "Yes"),
                 PromptOption(number: 2, label: "Allow \(pendingToolName) for session"),

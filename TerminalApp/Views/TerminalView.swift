@@ -19,6 +19,12 @@ struct TmuxWindow: Identifiable, Equatable {
     let elapsed: Int
     let pendingApproval: Bool
     let pendingToolName: String
+    /// Monotonic counter that increments each time pendingApproval
+    /// transitions false → true for this window. Zero when no prompt is
+    /// active. Used by SplitTerminalView to distinguish "the same prompt
+    /// I already answered" from "a brand-new prompt with identical
+    /// choices", and as the stale-guard key on /tmux-send-key.
+    let promptId: Int
     var id: Int { index }
 }
 
@@ -108,6 +114,7 @@ struct TerminalView: View {
                             activeWindowIndex: activeWindowIndex,
                             pendingApproval: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingApproval ?? false,
                             pendingToolName: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingToolName ?? "",
+                            promptId: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.promptId ?? 0,
                             onCapturedText: { lastCapturedText = $0 }
                         )
                     } else {
@@ -572,11 +579,13 @@ struct TerminalView: View {
                 let elapsed = (w["elapsed"] as? Int) ?? -1
                 let pendingApproval = (w["pendingApproval"] as? Bool) ?? false
                 let pendingToolName = (w["pendingToolName"] as? String) ?? ""
+                let promptId = (w["promptId"] as? Int) ?? 0
                 return TmuxWindow(index: index, name: name, active: active,
                                   command: command, cwd: cwd, summary: summary,
                                   status: status, elapsed: elapsed,
                                   pendingApproval: pendingApproval,
-                                  pendingToolName: pendingToolName)
+                                  pendingToolName: pendingToolName,
+                                  promptId: promptId)
             }
             DispatchQueue.main.async {
                 tmuxWindows = windows
