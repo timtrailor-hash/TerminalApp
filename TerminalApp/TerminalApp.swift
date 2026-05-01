@@ -66,7 +66,34 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             intentIdentifiers: [],
             options: [.customDismissAction]
         )
-        UNUserNotificationCenter.current().setNotificationCategories([proposalCategory])
+
+        // Bridge approval card (work-bridge step 6). Pushed when work-side
+        // Claude submits a request through the github-as-transport bridge.
+        // Approve runs the endpoint locally and writes an encrypted response;
+        // Deny writes an encrypted denial. Both actions require the user
+        // to be authenticated (Face ID / passcode) — the bridge gateway is
+        // the security boundary, this card is the gate's user-facing edge.
+        let bridgeApproveAction = UNNotificationAction(
+            identifier: "BRIDGE_APPROVE",
+            title: "Approve",
+            options: [.authenticationRequired]
+        )
+        let bridgeDenyAction = UNNotificationAction(
+            identifier: "BRIDGE_DENY",
+            title: "Deny",
+            options: [.destructive, .authenticationRequired]
+        )
+        let bridgeCategory = UNNotificationCategory(
+            identifier: "BRIDGE_REQUEST",
+            actions: [bridgeApproveAction, bridgeDenyAction],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+
+        UNUserNotificationCenter.current().setNotificationCategories([
+            proposalCategory,
+            bridgeCategory,
+        ])
 
         // End any orphan Live Activities left over from a prior run. The
         // server's push-to-start path creates a fresh LA on every turn when
@@ -223,6 +250,46 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                                                 object: nil,
                                                 userInfo: ["window": window])
             }
+            return
+        }
+
+        // Bridge approval card (work-bridge step 6). Approve / Deny tap maps
+        // to /bridge-approve/<uuid> or /bridge-deny/<uuid>. The push payload
+        // carries kind="bridge_request" plus uuid + endpoint + summary in
+        // userInfo so we know which endpoint to call. The endpoints enforce
+        // localhost-only origin (CONV_BRIDGE_LOCAL_ONLY=1) and Face ID is
+        // required by .authenticationRequired on the action — defence in
+        // depth on top of the gateway's own checks.
+        let bridgeAction: String? = {
+            switch actionId {
+            case "BRIDGE_APPROVE": return "approve"
+            case "BRIDGE_DENY":    return "deny"
+            default: return nil
+            }
+        }()
+        if let action = bridgeAction,
+           let kind = info["kind"] as? String, kind == "bridge_request",
+           let bridgeUuid = info["uuid"] as? String,
+           let server = self.server,
+           let url = URL(string: "\(server.baseURL)/bridge-\(action)/\(bridgeUuid)") {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !server.authToken.isEmpty {
+                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+            }
+            req.httpBody = try? JSONSerialization.data(
+                withJSONObject: ["source": "push-action"]
+            )
+            URLSession.shared.dataTask(with: req) { data, _, error in
+                if let error = error {
+                    print("Bridge \(action) POST failed: \(error)")
+                } else if let data = data,
+                          let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    print("Bridge \(action) response: \(body)")
+                }
+                DispatchQueue.main.async { completionHandler() }
+            }.resume()
             return
         }
 
