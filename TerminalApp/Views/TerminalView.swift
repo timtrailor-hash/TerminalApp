@@ -25,6 +25,10 @@ struct TmuxWindow: Identifiable, Equatable {
     /// I already answered" from "a brand-new prompt with identical
     /// choices", and as the stale-guard key on /tmux-send-key.
     let promptId: Int
+    let pendingIntent: String
+    let pendingRisk: String
+    let pendingBlastRadius: String
+    let pendingCommandPreview: String
     var id: Int { index }
 }
 
@@ -115,6 +119,10 @@ struct TerminalView: View {
                             pendingApproval: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingApproval ?? false,
                             pendingToolName: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingToolName ?? "",
                             promptId: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.promptId ?? 0,
+                            pendingIntent: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingIntent ?? "",
+                            pendingRisk: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingRisk ?? "",
+                            pendingBlastRadius: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingBlastRadius ?? "",
+                            pendingCommandPreview: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingCommandPreview ?? "",
                             onCapturedText: { lastCapturedText = $0 }
                         )
                     } else {
@@ -580,12 +588,20 @@ struct TerminalView: View {
                 let pendingApproval = (w["pendingApproval"] as? Bool) ?? false
                 let pendingToolName = (w["pendingToolName"] as? String) ?? ""
                 let promptId = (w["promptId"] as? Int) ?? 0
+                let pendingIntent = (w["pendingIntent"] as? String) ?? ""
+                let pendingRisk = (w["pendingRisk"] as? String) ?? ""
+                let pendingBlastRadius = (w["pendingBlastRadius"] as? String) ?? ""
+                let pendingCommandPreview = (w["pendingCommandPreview"] as? String) ?? ""
                 return TmuxWindow(index: index, name: name, active: active,
                                   command: command, cwd: cwd, summary: summary,
                                   status: status, elapsed: elapsed,
                                   pendingApproval: pendingApproval,
                                   pendingToolName: pendingToolName,
-                                  promptId: promptId)
+                                  promptId: promptId,
+                                  pendingIntent: pendingIntent,
+                                  pendingRisk: pendingRisk,
+                                  pendingBlastRadius: pendingBlastRadius,
+                                  pendingCommandPreview: pendingCommandPreview)
             }
             DispatchQueue.main.async {
                 tmuxWindows = windows

@@ -103,6 +103,10 @@ struct SplitTerminalView: View {
     /// Server increments this each time a fresh prompt opens so a tap
     /// answering the previous prompt doesn't pollute the next one.
     var promptId: Int = 0
+    var pendingIntent: String = ""
+    var pendingRisk: String = ""
+    var pendingBlastRadius: String = ""
+    var pendingCommandPreview: String = ""
     var onCapturedText: ((String) -> Void)?
 
     /// Highest promptId the user has already answered. Bar stays hidden
@@ -843,14 +847,10 @@ struct SplitTerminalView: View {
         return result
     }
 
-    /// Primary: JSONL-based approval detection (deterministic, no text parsing).
-    /// Fallback: pane-text-based detection (for surveys, non-standard prompts).
-    ///
-    /// Gate on `promptId > lastAnsweredPromptId` so once you've tapped an
-    /// answer the bar hides until the server announces a genuinely-new
-    /// prompt with a higher id. Without this gate the bar appeared
-    /// continuously through every back-to-back Bash-permission ask and
-    /// taps that missed the active prompt landed as digits in the input.
+    private var hasEnrichedPrompt: Bool {
+        pendingApproval && promptId > lastAnsweredPromptId && !pendingIntent.isEmpty
+    }
+
     private var effectivePromptOptions: [PromptOption] {
         if pendingApproval && promptId > lastAnsweredPromptId {
             return [
@@ -862,43 +862,160 @@ struct SplitTerminalView: View {
         return promptOptions
     }
 
+    // MARK: - Risk Badge
+
+    private func riskColor(_ risk: String) -> Color {
+        switch risk {
+        case "read-only": return .green
+        case "write-local": return .yellow
+        case "external": return .orange
+        case "destructive": return .red
+        default: return .gray
+        }
+    }
+
+    private func riskLabel(_ risk: String) -> String {
+        switch risk {
+        case "read-only": return "READ ONLY"
+        case "write-local": return "LOCAL WRITE"
+        case "external": return "EXTERNAL"
+        case "destructive": return "DESTRUCTIVE"
+        default: return risk.uppercased()
+        }
+    }
+
+    // MARK: - Enriched Prompt Card
+
+    private var enrichedPromptCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(riskLabel(pendingRisk))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(riskColor(pendingRisk).cornerRadius(4))
+
+                if !pendingBlastRadius.isEmpty {
+                    Text(pendingBlastRadius)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.gray)
+                }
+            }
+
+            Text(pendingIntent)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !pendingCommandPreview.isEmpty {
+                Text(pendingCommandPreview)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.gray)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    sendPromptChoice(1)
+                } label: {
+                    Text("Approve")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.accent.cornerRadius(8))
+                }
+
+                Button {
+                    sendPromptChoice(2)
+                } label: {
+                    Text("Allow for session")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(AppTheme.accent.opacity(0.5), lineWidth: 1)
+                        )
+                }
+
+                Button {
+                    sendPromptChoice(3)
+                } label: {
+                    Text("Deny")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.red.opacity(0.4), lineWidth: 1)
+                        )
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(AppTheme.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(riskColor(pendingRisk).opacity(0.4), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
     // MARK: - Prompt Option Buttons
 
     private var promptOptionsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(effectivePromptOptions) { opt in
-                    Button {
-                        sendPromptChoice(opt.number)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("\(opt.number)")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .foregroundColor(AppTheme.accent)
-                            Text(opt.label)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(AppTheme.cardBackground)
-                                .overlay(
+        Group {
+            if hasEnrichedPrompt {
+                enrichedPromptCard
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(effectivePromptOptions) { opt in
+                            Button {
+                                sendPromptChoice(opt.number)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text("\(opt.number)")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .foregroundColor(AppTheme.accent)
+                                    Text(opt.label)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                                        .fill(AppTheme.cardBackground)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                                        )
                                 )
-                        )
+                            }
+                        }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                 }
+                .background(AppTheme.background)
+                .frame(maxHeight: 52)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
         }
-        .background(AppTheme.background)
-        .frame(maxHeight: 52)
     }
 
     // MARK: - Input Section
