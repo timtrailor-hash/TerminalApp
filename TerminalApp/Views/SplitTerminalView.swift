@@ -490,6 +490,13 @@ struct SplitTerminalView: View {
                 evidence: "tail=[\(tailSample)]")
         }
 
+        // Walk back from endIdx to find the top of the option block. We
+        // accept option lines AND wrap continuations (4+ leading spaces,
+        // non-digit, non-empty). startIdx may end up *one above* the real
+        // first option if a wrap-shaped line sits immediately above option
+        // 1 — the validation pass below handles that via its
+        // `guard !collected.isEmpty` bail when the first line in the range
+        // fails to parse.
         var startIdx = endIdx
         while startIdx > 0 {
             let prevText = tail[startIdx - 1].text
@@ -506,12 +513,26 @@ struct SplitTerminalView: View {
         var anyActive = false
         var activeLine = ""
         for i in startIdx...endIdx {
-            guard let parsed = parsePromptOptionLine(tail[i].text) else {
+            if let parsed = parsePromptOptionLine(tail[i].text) {
+                collected.append(parsed)
+                if hasActiveSelector(tail[i].text) { anyActive = true; activeLine = tail[i].text }
+                continue
+            }
+            // Wrap continuation of the previous option's label. The walk-up
+            // only let us land here on a line with 4+ leading spaces that
+            // doesn't start with a digit — i.e. a wrapped tail of the option
+            // immediately above. Merge it into that option's label so the
+            // 1…N contiguity check below still passes.
+            guard !collected.isEmpty else {
                 return DetectResult(options: [], reason: "unparseable-option-in-block",
                     evidence: "failed='\(tail[i].text.prefix(60))'")
             }
-            collected.append(parsed)
-            if hasActiveSelector(tail[i].text) { anyActive = true; activeLine = tail[i].text }
+            let cont = tail[i].text.trimmingCharacters(in: .whitespaces)
+            if cont.isEmpty { continue }
+            let last = collected.removeLast()
+            // Defer the 60-char cap to the final map below so multi-line
+            // wraps accumulate cleanly without compound truncation.
+            collected.append((last.0, last.1 + " " + cont))
         }
         guard collected.count >= 2 else {
             return DetectResult(options: [], reason: "too-few-options-\(collected.count)", evidence: "")
@@ -524,7 +545,10 @@ struct SplitTerminalView: View {
             return DetectResult(options: [], reason: "no-active-selector",
                 evidence: "collected=\(collected.map{"\($0.0).\($0.1)"}.joined(separator: ", ")) tail=[\(tailSample)]")
         }
-        let opts = collected.map { PromptOption(number: $0.0, label: $0.1) }
+        let opts = collected.map { (num, label) -> PromptOption in
+            let capped = label.count > 60 ? String(label.prefix(57)) + "…" : label
+            return PromptOption(number: num, label: capped)
+        }
         return DetectResult(options: opts, reason: "active-prompt",
             evidence: "selector-on='\(activeLine.prefix(60))'")
     }
@@ -631,9 +655,9 @@ struct SplitTerminalView: View {
         let rest = body[body.index(after: sepIdx)...]
             .trimmingCharacters(in: .whitespaces)
         guard !rest.isEmpty else { return nil }
-        // Cap label length so the button row stays scannable.
-        let label = rest.count > 60 ? String(rest.prefix(57)) + "…" : rest
-        return (num, label)
+        // Label cap is applied in detectPromptOptionsWithReason after any
+        // wrap-continuation merge so multi-line options don't compound truncate.
+        return (num, String(rest))
     }
 
     private func sendPromptChoice(_ number: Int) {
