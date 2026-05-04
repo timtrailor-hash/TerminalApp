@@ -85,6 +85,16 @@ private struct PromptOption: Identifiable, Equatable {
     var id: Int { number }
 }
 
+/// Server-supplied pane option (parsed from /tmux-windows response).
+/// When non-empty, drives the rich card's button count + labels so
+/// hook-driven asks (2 options) and native asks (3 options) both render
+/// correctly without iOS hardcoding either count.
+struct PaneOption: Codable, Hashable, Identifiable {
+    let number: Int
+    let label: String
+    var id: Int { number }
+}
+
 
 struct SplitTerminalView: View {
     @ObservedObject var commandRunner: SSHCommandRunner
@@ -107,6 +117,14 @@ struct SplitTerminalView: View {
     var pendingRisk: String = ""
     var pendingBlastRadius: String = ""
     var pendingCommandPreview: String = ""
+    /// "native" (Claude Code's own permission prompt — 3 options) or
+    /// "hook" (Bash safety hook ASK card — typically 2 options). Drives
+    /// whether the rich card renders 2 or 3 buttons. Empty = legacy.
+    var pendingPromptType: String = ""
+    /// Actual options parsed from the pane (number + label). When
+    /// non-empty, the rich card renders these instead of the hardcoded
+    /// 3-button layout. Empty = legacy 3-button layout.
+    var pendingOptions: [PaneOption] = []
     var onCapturedText: ((String) -> Void)?
 
     /// Highest promptId the user has already answered. Bar stays hidden
@@ -875,15 +893,135 @@ struct SplitTerminalView: View {
         pendingApproval && promptId > lastAnsweredPromptId && !pendingIntent.isEmpty
     }
 
+    /// Whether the pending prompt comes from a hook (Bash safety hook
+    /// emitting permissionDecision: ask) vs a native Claude Code prompt
+    /// (tool not in the allowlist). Hook prompts have 2 options; native
+    /// prompts have 3.
+    private var isHookPrompt: Bool {
+        pendingPromptType == "hook"
+    }
+
     private var effectivePromptOptions: [PromptOption] {
         if pendingApproval && promptId > lastAnsweredPromptId {
+            // If the server gave us the actual pane options, prefer them.
+            // Falls back to the legacy 3-button native layout when empty
+            // (e.g. older server that doesn't send pendingOptions).
+            if !pendingOptions.isEmpty {
+                return pendingOptions.map { PromptOption(number: $0.number, label: $0.label) }
+            }
             return [
-                PromptOption(number: 1, label: "Yes"),
+                PromptOption(number: 1, label: "Approve \(pendingToolName)"),
                 PromptOption(number: 2, label: "Allow \(pendingToolName) for session"),
-                PromptOption(number: 3, label: "No"),
+                PromptOption(number: 3, label: "Deny"),
             ]
         }
         return promptOptions
+    }
+
+    // MARK: - Prompt Option Colour Semantic
+
+    /// Colour-code basic prompt option buttons by semantic intent.
+    /// "Yes"/"Approve" → green (affirmative), "No"/"Deny"/"Cancel" → red
+    /// (decline), everything else → accent. Mirrors the colour-coding on
+    /// the rich enrichedPromptCard so hook-driven asks don't render as
+    /// monochrome blocks Tim can't tell apart at a glance.
+    private struct OptionStyle {
+        let foreground: Color
+        let stroke: Color
+        let fill: Color
+    }
+
+    private func promptOptionSemantic(_ label: String) -> OptionStyle {
+        let lower = label.lowercased()
+        if lower == "yes" || lower.hasPrefix("approve") {
+            return OptionStyle(
+                foreground: .green,
+                stroke: Color.green.opacity(0.5),
+                fill: Color.green.opacity(0.12)
+            )
+        }
+        if lower == "no" || lower == "deny" || lower == "cancel" || lower == "reject" {
+            return OptionStyle(
+                foreground: .red,
+                stroke: Color.red.opacity(0.5),
+                fill: Color.red.opacity(0.12)
+            )
+        }
+        return OptionStyle(
+            foreground: AppTheme.accent,
+            stroke: AppTheme.accent.opacity(0.4),
+            fill: AppTheme.cardBackground
+        )
+    }
+
+    // MARK: - Enriched-card button styling
+
+    private enum EnrichedButtonRole {
+        case primary    // First / Approve / Yes — green-on-fill
+        case secondary  // Middle option — accent outline
+        case decline    // Last / Deny / No — red outline
+    }
+
+    /// Decide button role from option label + position. The label is
+    /// authoritative when it's a recognised verb (Approve/Yes/Deny/No);
+    /// otherwise position governs (1st = primary, last = decline,
+    /// middle = secondary).
+    private func enrichedButtonRole(for label: String, total: Int, number: Int) -> EnrichedButtonRole {
+        let lower = label.lowercased()
+        if lower == "yes" || lower.hasPrefix("approve") {
+            return .primary
+        }
+        if lower == "no" || lower == "deny" || lower == "cancel" || lower == "reject" {
+            return .decline
+        }
+        if number == 1 {
+            return .primary
+        }
+        if number == total {
+            return .decline
+        }
+        return .secondary
+    }
+
+    /// Re-label option text where it improves clarity. "Yes" alone reads
+    /// thin on a permission card; show "Approve" for the primary slot of
+    /// a 2-option hook prompt.
+    private func enrichedButtonText(for opt: PaneOption, role: EnrichedButtonRole) -> String {
+        let lower = opt.label.lowercased()
+        if role == .primary && lower == "yes" {
+            return "Approve"
+        }
+        if role == .decline && lower == "no" {
+            return "Deny"
+        }
+        return opt.label
+    }
+
+    private func enrichedButtonForeground(role: EnrichedButtonRole) -> Color {
+        switch role {
+        case .primary: return .black
+        case .secondary: return AppTheme.accent
+        case .decline: return .gray
+        }
+    }
+
+    /// The Approve button is colour-coded by the RISK of the underlying
+    /// operation, not by the affirmative/decline semantic. Read-only is
+    /// green, local write is amber, external is orange, destructive is
+    /// red. Tim 2026-05-04: "Colour isn't driven by approve/deny but by
+    /// the risk of the decision."
+    @ViewBuilder
+    private func enrichedButtonBackground(role: EnrichedButtonRole) -> some View {
+        switch role {
+        case .primary:
+            RoundedRectangle(cornerRadius: 8).fill(riskColor(pendingRisk))
+        case .secondary:
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(AppTheme.accent.opacity(0.5), lineWidth: 1)
+        case .decline:
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.gray.opacity(0.5), lineWidth: 1)
+        }
     }
 
     // MARK: - Risk Badge
@@ -941,44 +1079,64 @@ struct SplitTerminalView: View {
                     .truncationMode(.middle)
             }
 
+            // Render N buttons matching the actual prompt options. For
+            // hook-driven asks this is 2 buttons (Yes -> green Approve,
+            // No -> red Deny). For native Claude Code permissions it's 3
+            // (Approve / Allow for session / Deny). Falls back to legacy
+            // 3-button hardcoded layout when pendingOptions is empty.
             HStack(spacing: 8) {
-                Button {
-                    sendPromptChoice(1)
-                } label: {
-                    Text("Approve")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(AppTheme.accent.cornerRadius(8))
-                }
-
-                Button {
-                    sendPromptChoice(2)
-                } label: {
-                    Text("Allow for session")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(AppTheme.accent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(AppTheme.accent.opacity(0.5), lineWidth: 1)
-                        )
-                }
-
-                Button {
-                    sendPromptChoice(3)
-                } label: {
-                    Text("Deny")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(Color.red.opacity(0.4), lineWidth: 1)
-                        )
+                if !pendingOptions.isEmpty {
+                    ForEach(pendingOptions) { opt in
+                        let role = enrichedButtonRole(for: opt.label, total: pendingOptions.count, number: opt.number)
+                        Button {
+                            sendPromptChoice(opt.number)
+                        } label: {
+                            Text(enrichedButtonText(for: opt, role: role))
+                                .font(.system(size: role == .primary ? 13 : 12, weight: role == .primary ? .bold : .medium))
+                                .foregroundColor(enrichedButtonForeground(role: role))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(enrichedButtonBackground(role: role))
+                        }
+                    }
+                } else {
+                    // Legacy fallback (server didn't send pendingOptions).
+                    Button {
+                        sendPromptChoice(1)
+                    } label: {
+                        Text("Approve")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(AppTheme.accent.cornerRadius(8))
+                    }
+                    Button {
+                        sendPromptChoice(2)
+                    } label: {
+                        Text("Allow for session")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(AppTheme.accent.opacity(0.5), lineWidth: 1)
+                            )
+                    }
+                    Button {
+                        sendPromptChoice(3)
+                    } label: {
+                        Text("Deny")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(Color.red.opacity(0.4), lineWidth: 1)
+                            )
+                    }
                 }
             }
             .padding(.top, 2)
@@ -1007,13 +1165,14 @@ struct SplitTerminalView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(effectivePromptOptions) { opt in
+                            let semantic = promptOptionSemantic(opt.label)
                             Button {
                                 sendPromptChoice(opt.number)
                             } label: {
                                 HStack(spacing: 6) {
                                     Text("\(opt.number)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                        .foregroundColor(AppTheme.accent)
+                                        .foregroundColor(semantic.foreground)
                                     Text(opt.label)
                                         .font(.system(size: 12, design: .monospaced))
                                         .foregroundColor(.white)
@@ -1024,10 +1183,10 @@ struct SplitTerminalView: View {
                                 .padding(.vertical, 8)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .fill(AppTheme.cardBackground)
+                                        .fill(semantic.fill)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 8)
-                                                .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                                                .strokeBorder(semantic.stroke, lineWidth: 1)
                                         )
                                 )
                             }

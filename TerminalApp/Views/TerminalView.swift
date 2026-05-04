@@ -29,6 +29,11 @@ struct TmuxWindow: Identifiable, Equatable {
     let pendingRisk: String
     let pendingBlastRadius: String
     let pendingCommandPreview: String
+    /// "native" or "hook" — drives whether the rich card renders 2 or 3
+    /// buttons. Empty string when not applicable / older server.
+    let pendingPromptType: String
+    /// Pane-parsed options. Empty when not applicable / older server.
+    let pendingOptions: [PaneOption]
     var id: Int { index }
 }
 
@@ -112,17 +117,20 @@ struct TerminalView: View {
 
                 if ssh.isConnected {
                     if useSplitView {
+                        let activeWin = tmuxWindows.first(where: { $0.index == activeWindowIndex })
                         SplitTerminalView(
                             commandRunner: commandRunner,
                             ssh: ssh,
                             activeWindowIndex: activeWindowIndex,
-                            pendingApproval: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingApproval ?? false,
-                            pendingToolName: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingToolName ?? "",
-                            promptId: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.promptId ?? 0,
-                            pendingIntent: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingIntent ?? "",
-                            pendingRisk: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingRisk ?? "",
-                            pendingBlastRadius: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingBlastRadius ?? "",
-                            pendingCommandPreview: tmuxWindows.first(where: { $0.index == activeWindowIndex })?.pendingCommandPreview ?? "",
+                            pendingApproval: activeWin?.pendingApproval ?? false,
+                            pendingToolName: activeWin?.pendingToolName ?? "",
+                            promptId: activeWin?.promptId ?? 0,
+                            pendingIntent: activeWin?.pendingIntent ?? "",
+                            pendingRisk: activeWin?.pendingRisk ?? "",
+                            pendingBlastRadius: activeWin?.pendingBlastRadius ?? "",
+                            pendingCommandPreview: activeWin?.pendingCommandPreview ?? "",
+                            pendingPromptType: activeWin?.pendingPromptType ?? "",
+                            pendingOptions: activeWin?.pendingOptions ?? [],
                             onCapturedText: { lastCapturedText = $0 }
                         )
                     } else {
@@ -592,6 +600,15 @@ struct TerminalView: View {
                 let pendingRisk = (w["pendingRisk"] as? String) ?? ""
                 let pendingBlastRadius = (w["pendingBlastRadius"] as? String) ?? ""
                 let pendingCommandPreview = (w["pendingCommandPreview"] as? String) ?? ""
+                let pendingPromptType = (w["pendingPromptType"] as? String) ?? ""
+                var pendingOptions: [PaneOption] = []
+                if let raw = w["pendingOptions"] as? [[String: Any]] {
+                    pendingOptions = raw.compactMap { entry in
+                        guard let n = entry["number"] as? Int,
+                              let l = entry["label"] as? String else { return nil }
+                        return PaneOption(number: n, label: l)
+                    }
+                }
                 return TmuxWindow(index: index, name: name, active: active,
                                   command: command, cwd: cwd, summary: summary,
                                   status: status, elapsed: elapsed,
@@ -601,7 +618,9 @@ struct TerminalView: View {
                                   pendingIntent: pendingIntent,
                                   pendingRisk: pendingRisk,
                                   pendingBlastRadius: pendingBlastRadius,
-                                  pendingCommandPreview: pendingCommandPreview)
+                                  pendingCommandPreview: pendingCommandPreview,
+                                  pendingPromptType: pendingPromptType,
+                                  pendingOptions: pendingOptions)
             }
             DispatchQueue.main.async {
                 tmuxWindows = windows
