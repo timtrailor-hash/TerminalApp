@@ -886,6 +886,42 @@ struct SplitTerminalView: View {
         return promptOptions
     }
 
+    // MARK: - Prompt Option Colour Semantic
+
+    /// Colour-code basic prompt option buttons by semantic intent.
+    /// "Yes"/"Approve" → green (affirmative), "No"/"Deny"/"Cancel" → red
+    /// (decline), everything else → accent. Mirrors the colour-coding on
+    /// the rich enrichedPromptCard so hook-driven asks don't render as
+    /// monochrome blocks Tim can't tell apart at a glance.
+    private struct OptionStyle {
+        let foreground: Color
+        let stroke: Color
+        let fill: Color
+    }
+
+    private func promptOptionSemantic(_ label: String) -> OptionStyle {
+        let lower = label.lowercased()
+        if lower == "yes" || lower.hasPrefix("approve") {
+            return OptionStyle(
+                foreground: .green,
+                stroke: Color.green.opacity(0.5),
+                fill: Color.green.opacity(0.12)
+            )
+        }
+        if lower == "no" || lower == "deny" || lower == "cancel" || lower == "reject" {
+            return OptionStyle(
+                foreground: .red,
+                stroke: Color.red.opacity(0.5),
+                fill: Color.red.opacity(0.12)
+            )
+        }
+        return OptionStyle(
+            foreground: AppTheme.accent,
+            stroke: AppTheme.accent.opacity(0.4),
+            fill: AppTheme.cardBackground
+        )
+    }
+
     // MARK: - Risk Badge
 
     private func riskColor(_ risk: String) -> Color {
@@ -1007,13 +1043,14 @@ struct SplitTerminalView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(effectivePromptOptions) { opt in
+                            let semantic = promptOptionSemantic(opt.label)
                             Button {
                                 sendPromptChoice(opt.number)
                             } label: {
                                 HStack(spacing: 6) {
                                     Text("\(opt.number)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                        .foregroundColor(AppTheme.accent)
+                                        .foregroundColor(semantic.foreground)
                                     Text(opt.label)
                                         .font(.system(size: 12, design: .monospaced))
                                         .foregroundColor(.white)
@@ -1024,10 +1061,10 @@ struct SplitTerminalView: View {
                                 .padding(.vertical, 8)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .fill(AppTheme.cardBackground)
+                                        .fill(semantic.fill)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 8)
-                                                .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                                                .strokeBorder(semantic.stroke, lineWidth: 1)
                                         )
                                 )
                             }
