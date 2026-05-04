@@ -932,10 +932,15 @@ struct SplitTerminalView: View {
     // MARK: - Prompt Option Colour Semantic
 
     /// Colour-code basic prompt option buttons by semantic intent.
-    /// "Yes"/"Approve" → green (affirmative), "No"/"Deny"/"Cancel" → red
-    /// (decline), everything else → accent. Mirrors the colour-coding on
-    /// the rich enrichedPromptCard so hook-driven asks don't render as
-    /// monochrome blocks Tim can't tell apart at a glance.
+    /// Affirmative buttons (Yes / Approve) take their colour from the
+    /// RISK of the underlying operation — not from approve/deny
+    /// semantics. Read-only is green, write-local is amber, external is
+    /// orange, destructive is red. When risk data isn't available
+    /// (e.g. older server, no pendingApproval), affirmative falls back
+    /// to neutral accent so we never imply "safe" by accident.
+    /// Decline buttons (No / Deny / Cancel) stay neutral grey because
+    /// declining is always the safe path. Tim 2026-05-04: "Colour isn't
+    /// driven by approve/deny but by the risk of the decision."
     private struct OptionStyle {
         let foreground: Color
         let stroke: Color
@@ -945,17 +950,29 @@ struct SplitTerminalView: View {
     private func promptOptionSemantic(_ label: String) -> OptionStyle {
         let lower = label.lowercased()
         if lower == "yes" || lower.hasPrefix("approve") {
+            // Risk-coloured affirmative. If we have no risk data, use
+            // accent — never green by default, since "no risk known" is
+            // not the same as "read-only".
+            let risk = pendingRisk
+            if !risk.isEmpty {
+                let c = riskColor(risk)
+                return OptionStyle(
+                    foreground: c,
+                    stroke: c.opacity(0.5),
+                    fill: c.opacity(0.12)
+                )
+            }
             return OptionStyle(
-                foreground: .green,
-                stroke: Color.green.opacity(0.5),
-                fill: Color.green.opacity(0.12)
+                foreground: AppTheme.accent,
+                stroke: AppTheme.accent.opacity(0.5),
+                fill: AppTheme.accent.opacity(0.12)
             )
         }
         if lower == "no" || lower == "deny" || lower == "cancel" || lower == "reject" {
             return OptionStyle(
-                foreground: .red,
-                stroke: Color.red.opacity(0.5),
-                fill: Color.red.opacity(0.12)
+                foreground: .gray,
+                stroke: Color.gray.opacity(0.5),
+                fill: Color.gray.opacity(0.12)
             )
         }
         return OptionStyle(
