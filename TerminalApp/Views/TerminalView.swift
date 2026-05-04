@@ -85,6 +85,10 @@ struct TerminalView: View {
     @State private var isUploading = false
     @State private var pendingFiles: [PendingFile] = []
     @State private var showPendingFiles = false
+    /// Paths from the most recent successful upload, handed to
+    /// SplitTerminalView via Binding so it can combine them with any
+    /// typed prose and submit as one message. Cleared by the consumer.
+    @State private var pendingPathsToConsume: [String] = []
 
     private var serverIP: String {
         String(server.serverHost.split(separator: ":").first ?? "100.126.253.40")
@@ -131,7 +135,8 @@ struct TerminalView: View {
                             pendingCommandPreview: activeWin?.pendingCommandPreview ?? "",
                             pendingPromptType: activeWin?.pendingPromptType ?? "",
                             pendingOptions: activeWin?.pendingOptions ?? [],
-                            onCapturedText: { lastCapturedText = $0 }
+                            onCapturedText: { lastCapturedText = $0 },
+                            pendingPathsToConsume: $pendingPathsToConsume
                         )
                     } else {
                         SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle, terminalViewRef: $terminalViewRef)
@@ -865,24 +870,18 @@ struct TerminalView: View {
                 pendingFiles = []
 
                 if !uploadedPaths.isEmpty {
-                    // Paste file paths into the terminal input WITHOUT pressing enter.
-                    // The user can then type their message after the paths and submit together.
-                    // Claude Code will see the paths inline and read the files.
-                    let pathsText = uploadedPaths.joined(separator: " ")
+                    // Hand the paths off to SplitTerminalView via the
+                    // pendingPathsToConsume binding. SplitTerminalView's
+                    // .onChange handler reads any prose typed in the
+                    // active tab's input field and submits paths + prose
+                    // as one message. If no prose is pending it falls
+                    // back to pasting paths to the pane unchanged.
+                    // Fixes the 2026-05-04 bug where typed prose got lost
+                    // alongside an attachment upload.
                     if useSplitView {
-                        // Use HTTP endpoint to inject paths into the active tmux window
-                        let window = activeWindowIndex
-                        if let url = URL(string: "\(server.baseURL)/tmux-send-text") {
-                            var req = URLRequest(url: url)
-                            req.httpMethod = "POST"
-                            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                            if !server.authToken.isEmpty {
-                                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-                            }
-                            req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": pathsText + " ", "window": window])
-                            URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
-                        }
+                        pendingPathsToConsume = uploadedPaths
                     } else {
+                        let pathsText = uploadedPaths.joined(separator: " ")
                         ssh.sendString(pathsText + " ")
                     }
 
