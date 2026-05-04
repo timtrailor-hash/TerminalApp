@@ -126,6 +126,14 @@ struct SplitTerminalView: View {
     /// 3-button layout. Empty = legacy 3-button layout.
     var pendingOptions: [PaneOption] = []
     var onCapturedText: ((String) -> Void)?
+    /// Set by TerminalView after a successful upload. Watched here via
+    /// .onChange — when a non-empty list arrives, combine the paths with
+    /// any prose typed into the active tab's input field and submit the
+    /// whole thing as one message. Empty prose falls back to pasting
+    /// paths to the pane (legacy "drop a file alone" workflow).
+    /// Fixes the "type prose + attach + upload loses prose" bug Tim
+    /// flagged 2026-05-04.
+    @Binding var pendingPathsToConsume: [String]
 
     /// Highest promptId the user has already answered. Bar stays hidden
     /// while `promptId <= lastAnsweredPromptId` — prevents the "tap
@@ -412,6 +420,9 @@ struct SplitTerminalView: View {
             startPolling()
         }
         .onDisappear { stopPolling() }
+        .onChange(of: pendingPathsToConsume) { _, newPaths in
+            consumeUploadedPaths(newPaths)
+        }
         .onChange(of: activeWindowIndex) { _, newIndex in
             // Keep per-tab cached content; just refresh in background.
             isUserScrolledUp = false
@@ -1243,6 +1254,30 @@ struct SplitTerminalView: View {
     }
 
     // MARK: - Actions
+
+    /// Combine uploaded file paths with any prose typed into the active
+    /// tab's input field and submit them as one message. If no prose is
+    /// pending, paste the paths to the tmux pane unconditionally
+    /// (preserves the old "drop a file alone" workflow). Either way,
+    /// clears the consumption queue so the same paths don't fire twice.
+    private func consumeUploadedPaths(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        let pathsText = paths.joined(separator: " ")
+        let currentInput = perTabInput[activeWindowIndex] ?? ""
+        let prose = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prose.isEmpty {
+            perTabInput[activeWindowIndex] = pathsText + " " + prose
+            sendInput()
+        } else {
+            let window = activeWindowIndex
+            Task {
+                await httpSendText(pathsText + " ", window: window)
+            }
+        }
+        DispatchQueue.main.async {
+            self.pendingPathsToConsume = []
+        }
+    }
 
     private func sendInput() {
         let current = perTabInput[activeWindowIndex] ?? ""
