@@ -50,6 +50,37 @@ private func formatTabStatus(_ status: String, _ elapsed: Int) -> String {
     }
 }
 
+/// Flattens the v1 typed `TimSharedKit.TmuxWindow` (with nested
+/// `pending_prompt`) into the local flat `TmuxWindow` shape that
+/// SplitTerminalView still consumes. Step 5 of the pause will collapse
+/// the local struct onto the contract directly; until then this is the
+/// adapter that lets PR A2 land without churning every consumer.
+private func translateContractsTmuxWindow(_ w: TimSharedKit.TmuxWindow) -> TmuxWindow {
+    let p = w.pendingPrompt
+    let options: [PaneOption] = p?.options.map {
+        PaneOption(number: $0.number, label: $0.label)
+    } ?? []
+    return TmuxWindow(
+        index: w.index,
+        name: w.name,
+        active: w.active,
+        command: w.command,
+        cwd: w.cwd,
+        summary: w.summary,
+        status: w.status.rawValue,
+        elapsed: w.elapsed,
+        pendingApproval: p != nil,
+        pendingToolName: p?.toolName ?? "",
+        promptId: p?.promptId ?? 0,
+        pendingIntent: p?.intent ?? "",
+        pendingRisk: p?.risk?.rawValue ?? "",
+        pendingBlastRadius: p?.blastRadius ?? "",
+        pendingCommandPreview: p?.commandPreview ?? "",
+        pendingPromptType: p?.promptType.rawValue ?? "",
+        pendingOptions: options
+    )
+}
+
 /// Native SSH terminal using SwiftTerm + NIOSSH.
 struct TerminalView: View {
     @EnvironmentObject var server: ServerConnection
@@ -586,8 +617,45 @@ struct TerminalView: View {
         }
         guard let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let data = data else { return }
+
+            let applyWindows: ([TmuxWindow]) -> Void = { windows in
+                DispatchQueue.main.async {
+                    tmuxWindows = windows
+                    // On first load, sync active window from tmux's perspective
+                    if !hasSyncedInitialWindow, let active = windows.first(where: { $0.active }) {
+                        activeWindowIndex = active.index
+                        hasSyncedInitialWindow = true
+                    }
+                    // If our current activeWindowIndex no longer exists (the
+                    // user just killed that tab), snap to whichever window
+                    // tmux now reports as active — otherwise the pane keeps
+                    // polling a dead window and the tab bar's orange
+                    // selection drifts out of sync with the displayed pane.
+                    else if !windows.contains(where: { $0.index == activeWindowIndex }) {
+                        if let active = windows.first(where: { $0.active }) {
+                            activeWindowIndex = active.index
+                        } else if let first = windows.first {
+                            activeWindowIndex = first.index
+                        }
+                    }
+                }
+            }
+
+            // v1 typed path: when the server emits a schema_version="v1"
+            // envelope, decode via the canonical TimSharedKit contract
+            // and translate to the local flat TmuxWindow shape. Today's
+            // server still emits the untyped JSON below, so this branch
+            // returns nil and falls through. Activates atomically when
+            // PR B flips the server to v1-only emission.
+            if let typed = try? JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data),
+               typed.schemaVersion == TimSharedKit.ContractsSchemaVersion {
+                applyWindows(typed.windows.map(translateContractsTmuxWindow))
+                return
+            }
+
+            // Legacy untyped path. Untouched by the v1 rollout.
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let windowsArr = json["windows"] as? [[String: Any]] else { return }
             let windows = windowsArr.compactMap { w -> TmuxWindow? in
                 guard let index = w["index"] as? Int,
@@ -627,26 +695,7 @@ struct TerminalView: View {
                                   pendingPromptType: pendingPromptType,
                                   pendingOptions: pendingOptions)
             }
-            DispatchQueue.main.async {
-                tmuxWindows = windows
-                // On first load, sync active window from tmux's perspective
-                if !hasSyncedInitialWindow, let active = windows.first(where: { $0.active }) {
-                    activeWindowIndex = active.index
-                    hasSyncedInitialWindow = true
-                }
-                // If our current activeWindowIndex no longer exists (the
-                // user just killed that tab), snap to whichever window
-                // tmux now reports as active — otherwise the pane keeps
-                // polling a dead window and the tab bar's orange
-                // selection drifts out of sync with the displayed pane.
-                else if !windows.contains(where: { $0.index == activeWindowIndex }) {
-                    if let active = windows.first(where: { $0.active }) {
-                        activeWindowIndex = active.index
-                    } else if let first = windows.first {
-                        activeWindowIndex = first.index
-                    }
-                }
-            }
+            applyWindows(windows)
         }.resume()
     }
 
