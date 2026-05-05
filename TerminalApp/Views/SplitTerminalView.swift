@@ -145,6 +145,12 @@ struct SplitTerminalView: View {
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
     @State private var showQueueEditButton: Bool = false
+    /// Per-tab stack of texts the user submitted from iOS. Used by the
+    /// queue-edit button to restore the most recent send into the iOS
+    /// input field, since Claude Code's queue lives in the tmux pane and
+    /// is not directly readable from iOS. Capped to keep memory bounded.
+    @State private var sentTextStack: [Int: [String]] = [:]
+    @State private var isRecalling: Bool = false
     @State private var lastLoggedReasonKey: String = ""
 
     /// Every call to the prompt-option detector ends here. Logs the
@@ -1193,11 +1199,31 @@ struct SplitTerminalView: View {
     private var queueEditRow: some View {
         HStack {
             Button {
+                guard !isRecalling else { return }
+                isRecalling = true
                 let window = activeWindowIndex
+                var stack = sentTextStack[window] ?? []
+                let recalled = stack.popLast()
+                sentTextStack[window] = stack
+                if let recalled {
+                    perTabInput[window] = recalled
+                    saveDrafts()
+                }
+                inputFocused = true
                 Task {
                     _ = await httpSendKey("Up", window: window)
+                    // Only clear Claude Code's editor when iOS has the text
+                    // safely restored. If recalled is nil (empty iOS stack,
+                    // e.g. post-restart while CC's queue has items), Up alone
+                    // recalls into CC's editor where the user can still see
+                    // and edit it via tmux — sending C-u here would destroy
+                    // the message with no iOS-side recovery.
+                    if recalled != nil {
+                        _ = await httpSendKey("C-u", window: window)
+                    }
                     fastPollUntil = Date().addingTimeInterval(5)
                     await refreshPane()
+                    await MainActor.run { isRecalling = false }
                 }
             } label: {
                 HStack(spacing: 4) {
@@ -1359,6 +1385,11 @@ struct SplitTerminalView: View {
         let current = perTabInput[activeWindowIndex] ?? ""
         let text = current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+
+        var stack = sentTextStack[activeWindowIndex] ?? []
+        stack.append(text)
+        if stack.count > 20 { stack.removeFirst(stack.count - 20) }
+        sentTextStack[activeWindowIndex] = stack
 
         isSending = true
         let textToSend = text
