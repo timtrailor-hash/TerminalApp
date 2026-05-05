@@ -144,6 +144,7 @@ struct SplitTerminalView: View {
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
+    @State private var showQueueEditButton: Bool = false
     @State private var lastLoggedReasonKey: String = ""
 
     /// Every call to the prompt-option detector ends here. Logs the
@@ -395,6 +396,10 @@ struct SplitTerminalView: View {
 
                 if !effectivePromptOptions.isEmpty {
                     promptOptionsRow
+                }
+
+                if showQueueEditButton && effectivePromptOptions.isEmpty {
+                    queueEditRow
                 }
 
                 Divider()
@@ -1183,6 +1188,38 @@ struct SplitTerminalView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Queue Edit Button (A2b — iPhone has no up-arrow key)
+
+    private var queueEditRow: some View {
+        HStack {
+            Button {
+                let window = activeWindowIndex
+                Task {
+                    _ = await httpSendKey("Up", window: window)
+                    fastPollUntil = Date().addingTimeInterval(5)
+                    await refreshPane()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11))
+                    Text("Edit queued messages")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(AppTheme.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                )
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
     // MARK: - Prompt Option Buttons
 
     private var promptOptionsRow: some View {
@@ -1452,6 +1489,14 @@ struct SplitTerminalView: View {
             logButtonTransition(prev: prevOpts, next: result.options,
                 reason: "poll/\(result.reason)",
                 evidence: result.evidence, activeTab: capturedIndex)
+
+            let lines = perTabLines[capturedIndex] ?? []
+            let hasQueueHint = lines.suffix(10).contains {
+                $0.text.lowercased().contains("press up")
+            }
+            if hasQueueHint != showQueueEditButton {
+                showQueueEditButton = hasQueueHint
+            }
         }
     }
 }
