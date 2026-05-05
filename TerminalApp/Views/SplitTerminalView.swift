@@ -304,6 +304,10 @@ struct SplitTerminalView: View {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    private func httpSendEscape(window: Int) async {
+        _ = await httpSendKey("Escape", window: window)
+    }
+
     private func httpTmuxResize(cols: Int, rows: Int) async {
         guard let url = URL(string: "\(server.baseURL)/tmux-resize") else { return }
         var request = URLRequest(url: url)
@@ -580,10 +584,6 @@ struct SplitTerminalView: View {
         }
         return DetectResult(options: opts, reason: "active-prompt",
             evidence: "selector-on='\(activeLine.prefix(60))'")
-    }
-
-    private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
-        return detectPromptOptionsWithReason(lines).options
     }
 
     /// True if this line begins (after optional box-draw border) with the
@@ -1237,6 +1237,28 @@ struct SplitTerminalView: View {
 
         return VStack(spacing: 0) {
             HStack(alignment: .bottom, spacing: 8) {
+                // Esc button — clears local input AND sends Escape to tmux
+                // (unblocks stuck Claude Code TUI state)
+                Button {
+                    perTabInput[activeWindowIndex] = ""
+                    saveDrafts()
+                    Task { await httpSendEscape(window: activeWindowIndex) }
+                } label: {
+                    Text("esc")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.dimText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(AppTheme.cardBackground)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(AppTheme.dimText.opacity(0.4), lineWidth: 1)
+                                )
+                        )
+                }
+
                 TextEditor(text: inputText)
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundColor(.white)
