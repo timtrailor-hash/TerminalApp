@@ -144,6 +144,13 @@ struct SplitTerminalView: View {
 
     @State private var perTabLines: [Int: [PaneLine]] = [:]
     @State private var promptOptions: [PromptOption] = []
+    @State private var showQueueEditButton: Bool = false
+    /// Per-tab stack of texts the user submitted from iOS. Used by the
+    /// queue-edit button to restore the most recent send into the iOS
+    /// input field, since Claude Code's queue lives in the tmux pane and
+    /// is not directly readable from iOS. Capped to keep memory bounded.
+    @State private var sentTextStack: [Int: [String]] = [:]
+    @State private var isRecalling: Bool = false
     @State private var lastLoggedReasonKey: String = ""
 
     /// Every call to the prompt-option detector ends here. Logs the
@@ -304,6 +311,10 @@ struct SplitTerminalView: View {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    private func httpSendEscape(window: Int) async {
+        _ = await httpSendKey("Escape", window: window)
+    }
+
     private func httpTmuxResize(cols: Int, rows: Int) async {
         guard let url = URL(string: "\(server.baseURL)/tmux-resize") else { return }
         var request = URLRequest(url: url)
@@ -391,6 +402,10 @@ struct SplitTerminalView: View {
 
                 if !effectivePromptOptions.isEmpty {
                     promptOptionsRow
+                }
+
+                if showQueueEditButton && effectivePromptOptions.isEmpty {
+                    queueEditRow
                 }
 
                 Divider()
@@ -580,10 +595,6 @@ struct SplitTerminalView: View {
         }
         return DetectResult(options: opts, reason: "active-prompt",
             evidence: "selector-on='\(activeLine.prefix(60))'")
-    }
-
-    private func detectPromptOptions(_ lines: [PaneLine]) -> [PromptOption] {
-        return detectPromptOptionsWithReason(lines).options
     }
 
     /// True if this line begins (after optional box-draw border) with the
@@ -1183,6 +1194,58 @@ struct SplitTerminalView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Queue Edit Button (A2b — iPhone has no up-arrow key)
+
+    private var queueEditRow: some View {
+        HStack {
+            Button {
+                guard !isRecalling else { return }
+                isRecalling = true
+                let window = activeWindowIndex
+                var stack = sentTextStack[window] ?? []
+                let recalled = stack.popLast()
+                sentTextStack[window] = stack
+                if let recalled {
+                    perTabInput[window] = recalled
+                    saveDrafts()
+                }
+                inputFocused = true
+                Task {
+                    _ = await httpSendKey("Up", window: window)
+                    // Only clear Claude Code's editor when iOS has the text
+                    // safely restored. If recalled is nil (empty iOS stack,
+                    // e.g. post-restart while CC's queue has items), Up alone
+                    // recalls into CC's editor where the user can still see
+                    // and edit it via tmux — sending C-u here would destroy
+                    // the message with no iOS-side recovery.
+                    if recalled != nil {
+                        _ = await httpSendKey("C-u", window: window)
+                    }
+                    fastPollUntil = Date().addingTimeInterval(5)
+                    await refreshPane()
+                    await MainActor.run { isRecalling = false }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11))
+                    Text("Edit queued messages")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(AppTheme.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(AppTheme.accent.opacity(0.4), lineWidth: 1)
+                )
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
     // MARK: - Prompt Option Buttons
 
     private var promptOptionsRow: some View {
@@ -1237,6 +1300,28 @@ struct SplitTerminalView: View {
 
         return VStack(spacing: 0) {
             HStack(alignment: .bottom, spacing: 8) {
+                // Esc button — clears local input AND sends Escape to tmux
+                // (unblocks stuck Claude Code TUI state)
+                Button {
+                    perTabInput[activeWindowIndex] = ""
+                    saveDrafts()
+                    Task { await httpSendEscape(window: activeWindowIndex) }
+                } label: {
+                    Text("esc")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.dimText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(AppTheme.cardBackground)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(AppTheme.dimText.opacity(0.4), lineWidth: 1)
+                                )
+                        )
+                }
+
                 TextEditor(text: inputText)
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundColor(.white)
@@ -1300,6 +1385,11 @@ struct SplitTerminalView: View {
         let current = perTabInput[activeWindowIndex] ?? ""
         let text = current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+
+        var stack = sentTextStack[activeWindowIndex] ?? []
+        stack.append(text)
+        if stack.count > 20 { stack.removeFirst(stack.count - 20) }
+        sentTextStack[activeWindowIndex] = stack
 
         isSending = true
         let textToSend = text
@@ -1430,6 +1520,14 @@ struct SplitTerminalView: View {
             logButtonTransition(prev: prevOpts, next: result.options,
                 reason: "poll/\(result.reason)",
                 evidence: result.evidence, activeTab: capturedIndex)
+
+            let lines = perTabLines[capturedIndex] ?? []
+            let hasQueueHint = lines.suffix(10).contains {
+                $0.text.lowercased().contains("press up")
+            }
+            if hasQueueHint != showQueueEditButton {
+                showQueueEditButton = hasQueueHint
+            }
         }
     }
 }

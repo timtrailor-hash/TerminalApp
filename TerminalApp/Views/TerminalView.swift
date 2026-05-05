@@ -642,60 +642,14 @@ struct TerminalView: View {
                 }
             }
 
-            // v1 typed path: when the server emits a schema_version="v1"
-            // envelope, decode via the canonical TimSharedKit contract
-            // and translate to the local flat TmuxWindow shape. Today's
-            // server still emits the untyped JSON below, so this branch
-            // returns nil and falls through. Activates atomically when
-            // PR B flips the server to v1-only emission.
-            if let typed = try? JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data),
-               typed.schemaVersion == TimSharedKit.ContractsSchemaVersion {
-                applyWindows(typed.windows.map(translateContractsTmuxWindow))
-                return
-            }
-
-            // Legacy untyped path. Untouched by the v1 rollout.
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let windowsArr = json["windows"] as? [[String: Any]] else { return }
-            let windows = windowsArr.compactMap { w -> TmuxWindow? in
-                guard let index = w["index"] as? Int,
-                      let name = w["name"] as? String,
-                      let active = w["active"] as? Bool else { return nil }
-                let command = (w["command"] as? String) ?? ""
-                let cwd = (w["cwd"] as? String) ?? ""
-                let summary = (w["summary"] as? String) ?? ""
-                let status = (w["status"] as? String) ?? ""
-                let elapsed = (w["elapsed"] as? Int) ?? -1
-                let pendingApproval = (w["pendingApproval"] as? Bool) ?? false
-                let pendingToolName = (w["pendingToolName"] as? String) ?? ""
-                let promptId = (w["promptId"] as? Int) ?? 0
-                let pendingIntent = (w["pendingIntent"] as? String) ?? ""
-                let pendingRisk = (w["pendingRisk"] as? String) ?? ""
-                let pendingBlastRadius = (w["pendingBlastRadius"] as? String) ?? ""
-                let pendingCommandPreview = (w["pendingCommandPreview"] as? String) ?? ""
-                let pendingPromptType = (w["pendingPromptType"] as? String) ?? ""
-                var pendingOptions: [PaneOption] = []
-                if let raw = w["pendingOptions"] as? [[String: Any]] {
-                    pendingOptions = raw.compactMap { entry in
-                        guard let n = entry["number"] as? Int,
-                              let l = entry["label"] as? String else { return nil }
-                        return PaneOption(number: n, label: l)
-                    }
-                }
-                return TmuxWindow(index: index, name: name, active: active,
-                                  command: command, cwd: cwd, summary: summary,
-                                  status: status, elapsed: elapsed,
-                                  pendingApproval: pendingApproval,
-                                  pendingToolName: pendingToolName,
-                                  promptId: promptId,
-                                  pendingIntent: pendingIntent,
-                                  pendingRisk: pendingRisk,
-                                  pendingBlastRadius: pendingBlastRadius,
-                                  pendingCommandPreview: pendingCommandPreview,
-                                  pendingPromptType: pendingPromptType,
-                                  pendingOptions: pendingOptions)
-            }
-            applyWindows(windows)
+            // Decode via the canonical TimSharedKit v1 typed contract.
+            // The legacy JSONSerialization parser was removed after
+            // the server's v1 emission was activated (emit_v1_contracts
+            // flag, 2026-05-05). If decode fails (schema drift, network
+            // corruption), we silently skip — same as the old fallback.
+            guard let typed = try? JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data),
+                  typed.schemaVersion == TimSharedKit.ContractsSchemaVersion else { return }
+            applyWindows(typed.windows.map(translateContractsTmuxWindow))
         }.resume()
     }
 
