@@ -6,32 +6,91 @@ import os
 
 private let sshLog = Logger(subsystem: "com.timtrailor.terminal", category: "ssh")
 
+// MARK: - Host Key Storage (Keychain)
+
+enum HostKeyStore {
+    private static let service = "com.timtrailor.terminal.hostkeys"
+
+    static func save(host: String, key: String) {
+        let account = host
+        let data = Data(key.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func load(host: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: host,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func clear(host: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: host,
+        ]
+        SecItemDelete(query as CFDictionary)
+        sshLog.info("Cleared pinned host key for \(host)")
+    }
+
+    static func clearAll() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        SecItemDelete(query as CFDictionary)
+        sshLog.info("Cleared all pinned host keys")
+    }
+}
+
 // MARK: - Host Key Validation (trust-on-first-use)
 
 final class TOFUHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
     private let host: String
-    private static let defaultsPrefix = "SSHHostKey."
 
     init(host: String) {
         self.host = host
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        let key = Self.defaultsPrefix + host
+        let hostName = self.host
         let keyString = String(openSSHPublicKey: hostKey)
 
-        if let saved = UserDefaults.standard.string(forKey: key) {
-            if saved == keyString {
-                validationCompletePromise.succeed(())
+        DispatchQueue.main.async {
+            if let saved = HostKeyStore.load(host: hostName) {
+                if saved == keyString {
+                    validationCompletePromise.succeed(())
+                } else {
+                    sshLog.error("Host key mismatch for \(hostName). Saved key differs from presented key.")
+                    validationCompletePromise.fail(SSHHostKeyError.mismatch(host: hostName))
+                }
             } else {
-                sshLog.error("Host key mismatch for \(self.host) — possible MITM. Saved key differs from presented key.")
-                validationCompletePromise.fail(SSHHostKeyError.mismatch(host: self.host))
+                sshLog.info("First connection to \(hostName) — pinning host key")
+                HostKeyStore.save(host: hostName, key: keyString)
+                validationCompletePromise.succeed(())
             }
-        } else {
-            sshLog.info("First connection to \(self.host) — pinning host key")
-            UserDefaults.standard.set(keyString, forKey: key)
-            validationCompletePromise.succeed(())
         }
+    }
+
+    static func clearPinnedKey(for host: String) {
+        HostKeyStore.clear(host: host)
     }
 }
 
@@ -41,7 +100,7 @@ enum SSHHostKeyError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .mismatch(let host):
-            return "Host key for \(host) has changed. This could indicate a man-in-the-middle attack."
+            return "Host key for \(host) changed. Clear the pinned key in Settings to reconnect after a server rebuild."
         }
     }
 }

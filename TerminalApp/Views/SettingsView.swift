@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
     @AppStorage("sshPassword") private var sshPassword = ""
     @AppStorage("useSplitView") private var useSplitView = true
+    @State private var hostKeysCleared = false
 
     var body: some View {
         Form {
@@ -44,6 +45,22 @@ struct SettingsView: View {
                     SecureField("SSH password", text: $sshPassword)
                         .multilineTextAlignment(.trailing)
                         .font(.system(.body, design: .monospaced))
+                }
+            }
+
+            Section("Security") {
+                Button(role: .destructive) {
+                    HostKeyStore.clearAll()
+                    hostKeysCleared = true
+                } label: {
+                    HStack {
+                        Text("Clear Pinned SSH Host Keys")
+                        Spacer()
+                        if hostKeysCleared {
+                            Image(systemName: "checkmark")
+                                .foregroundColor(.green)
+                        }
+                    }
                 }
             }
 
