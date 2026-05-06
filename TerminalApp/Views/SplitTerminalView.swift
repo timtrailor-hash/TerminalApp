@@ -600,19 +600,18 @@ struct SplitTerminalView: View {
         let lower = t.lowercased()
         // "esc to interrupt" is the unambiguous active-work footer.
         if lower.contains("esc to interrupt") { return true }
-        // "Crafting…" / "Cogitating…" / "Brewing…" appear mid-response.
-        // Match keyword + ellipsis (Claude Code's TUI suffix) so user
-        // prose like "I was brewing coffee" doesn't false-positive.
-        // Past-tense ("Cogitated for Ns") is already specific enough on
-        // its own because it requires the "for" + numeric duration.
-        let endsWithEllipsis = t.hasSuffix("\u{2026}") || t.hasSuffix("...")
-        if endsWithEllipsis &&
-           (lower.contains("crafting") || lower.contains("cogitating") ||
-            lower.contains("brewing")) {
+        // Working spinner frames Claude Code emits during a response.
+        // Active tense ("Crafting…" / "Brewing…") requires the keyword
+        // appear immediately before an ellipsis so user prose like
+        // "I was brewing coffee" doesn't false-positive. Past tense
+        // ("Cogitated for 3s") requires the keyword + "for" + a digit
+        // so "I cogitated for a while" also stays unflagged.
+        let activePattern = #"\b(crafting|cogitating|brewing)\s*(\.\.\.|\u{2026})"#
+        if lower.range(of: activePattern, options: .regularExpression) != nil {
             return true
         }
-        if lower.contains("cogitated for") || lower.contains("brewed for") ||
-           lower.contains("crafted for") {
+        let pastPattern = #"\b(cogitated|brewed|crafted)\s+for\s+\d"#
+        if lower.range(of: pastPattern, options: .regularExpression) != nil {
             return true
         }
         if lower.contains("thinking") && (lower.contains("token") || lower.contains("thought for")) {
