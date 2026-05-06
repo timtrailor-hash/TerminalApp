@@ -179,6 +179,8 @@ private final class SSHConnection {
         self.password = password
         self.initialCols = initialCols
         self.initialRows = initialRows
+        self.lastCols = initialCols
+        self.lastRows = initialRows
         self.onData = onData
         self.onConnected = onConnected
         self.onError = onError
@@ -186,6 +188,8 @@ private final class SSHConnection {
     }
 
     private var keepaliveTask: RepeatedTask?
+    private var lastCols: Int
+    private var lastRows: Int
 
     func connect() {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -245,6 +249,8 @@ private final class SSHConnection {
 
     func resize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, let sessionChannel else { return }
+        lastCols = cols
+        lastRows = rows
         sessionChannel.eventLoop.execute {
             let event = SSHChannelRequestEvent.WindowChangeRequest(
                 terminalCharacterWidth: cols,
@@ -272,18 +278,20 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
-        // Send an SSH channel data keepalive every 15 seconds to prevent idle timeout
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
             initialDelay: .seconds(15),
             delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
-            // Send empty ignore data — keeps the connection alive without affecting the shell
-            let buffer = sc.allocator.buffer(capacity: 0)
-            // Write nothing — just flush to keep TCP alive
-            sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
+            let event = SSHChannelRequestEvent.WindowChangeRequest(
+                terminalCharacterWidth: self.lastCols,
+                terminalRowHeight: self.lastRows,
+                terminalPixelWidth: 0,
+                terminalPixelHeight: 0
+            )
+            sc.triggerUserOutboundEvent(event, promise: nil)
         }
-        sshLog.info("SSH keepalive started (15s interval)")
+        sshLog.info("SSH keepalive started (15s window-change interval)")
     }
 
     private func stopKeepalive() {

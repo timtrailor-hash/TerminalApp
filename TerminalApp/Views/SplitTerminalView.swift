@@ -134,6 +134,7 @@ struct SplitTerminalView: View {
     /// Fixes the "type prose + attach + upload loses prose" bug Tim
     /// flagged 2026-05-04.
     @Binding var pendingPathsToConsume: [String]
+    var tmuxWindowIndices: Set<Int> = []
 
     /// Highest promptId the user has already answered. Bar stays hidden
     /// while `promptId <= lastAnsweredPromptId` — prevents the "tap
@@ -152,6 +153,7 @@ struct SplitTerminalView: View {
     @State private var sentTextStack: [Int: [String]] = [:]
     @State private var isRecalling: Bool = false
     @State private var lastLoggedReasonKey: String = ""
+    @State private var lastLoggedReasonTime: Date = .distantPast
 
     /// Every call to the prompt-option detector ends here. Logs the
     /// transition (APPEAR/DISAPPEAR/CHANGE) with the reason code from the
@@ -170,8 +172,10 @@ struct SplitTerminalView: View {
         else if prev != next { kind = "CHANGE" }
         else { return }
         let key = "\(kind):\(reason):\(activeTab):\(next.map{String($0.number)}.joined(separator: ","))"
-        if key == lastLoggedReasonKey { return }
+        let now = Date()
+        if key == lastLoggedReasonKey && now.timeIntervalSince(lastLoggedReasonTime) < 3 { return }
         lastLoggedReasonKey = key
+        lastLoggedReasonTime = now
         let prevDesc = prev.isEmpty ? "empty" : prev.map { "\($0.number).\($0.label)" }.joined(separator: ",")
         let nextDesc = next.isEmpty ? "empty" : next.map { "\($0.number).\($0.label)" }.joined(separator: ",")
         splitLog.info("[button] \(kind, privacy: .public) tab=\(activeTab) reason=\(reason, privacy: .public) prev=[\(prevDesc, privacy: .public)] next=[\(nextDesc, privacy: .public)]")
@@ -239,6 +243,7 @@ struct SplitTerminalView: View {
     @State private var isSending = false
     @State private var fastPollUntil: Date = .distantPast
     @State private var isUserScrolledUp = false
+    @State private var toastMessage: String?
     @FocusState private var inputFocused: Bool
 
     /// @State mirror of `activeWindowIndex`. The parent passes
@@ -287,8 +292,9 @@ struct SplitTerminalView: View {
         }
     }
 
-    private func httpSendText(_ text: String, window: Int) async {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-text") else { return }
+    @discardableResult
+    private func httpSendText(_ text: String, window: Int) async -> Bool {
+        guard let url = URL(string: "\(server.baseURL)/tmux-send-text") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -296,11 +302,19 @@ struct SplitTerminalView: View {
             request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "window": window])
-        _ = try? await URLSession.shared.data(for: request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return (200...299).contains(status)
+        } catch {
+            splitLog.error("[send-text] network error: \(error.localizedDescription)")
+            return false
+        }
     }
 
-    private func httpSendEnter(window: Int) async {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-enter") else { return }
+    @discardableResult
+    private func httpSendEnter(window: Int) async -> Bool {
+        guard let url = URL(string: "\(server.baseURL)/tmux-send-enter") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -308,7 +322,14 @@ struct SplitTerminalView: View {
             request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["window": window])
-        _ = try? await URLSession.shared.data(for: request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return (200...299).contains(status)
+        } catch {
+            splitLog.error("[send-enter] network error: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private func httpSendEscape(window: Int) async {
@@ -387,49 +408,64 @@ struct SplitTerminalView: View {
     }
 
     enum LineType {
-        case userInput   // Lines the user typed (prompt lines)
-        case claudeText  // Claude's response text
-        case system      // Tool use, system info, etc.
+        case userInput     // Lines the user typed (prompt lines)
+        case claudeText    // Claude's response text
+        case system        // Tool use, system info, etc.
+        case superseded    // Rejected response-gate retry turn (strikethrough dimmed)
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let outputHeight = geo.size.height * 0.68
-            let outputSize = CGSize(width: geo.size.width, height: outputHeight)
-            VStack(spacing: 0) {
-                outputSection
-                    .frame(height: outputHeight)
-
-                if !effectivePromptOptions.isEmpty {
-                    promptOptionsRow
+        outputSection
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea(.keyboard)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { updateTmuxPaneSize(outputSize: geo.size) }
+                        .onReceive(NotificationCenter.default.publisher(
+                            for: UIDevice.orientationDidChangeNotification
+                        )) { _ in
+                            updateTmuxPaneSize(outputSize: geo.size)
+                        }
                 }
+            )
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    if !effectivePromptOptions.isEmpty {
+                        promptOptionsRow
+                    }
 
-                if showQueueEditButton && effectivePromptOptions.isEmpty {
-                    queueEditRow
+                    if showQueueEditButton && effectivePromptOptions.isEmpty {
+                        queueEditRow
+                    }
+
+                    Divider()
+                        .background(AppTheme.accent.opacity(0.3))
+
+                    inputSection
+                        .frame(minHeight: 56, maxHeight: 120)
                 }
-
-                Divider()
-                    .background(AppTheme.accent.opacity(0.3))
-
-                inputSection
-                    .frame(height: geo.size.height * 0.32)
             }
-            .onAppear { updateTmuxPaneSize(outputSize: outputSize) }
-            // onChange fires on every SwiftUI layout pass — during initial
-            // mount of a new tab that's 3-4 calls with slightly different
-            // sizes. Each one that differs (even by 1 col) sends another
-            // /tmux-resize → another SIGWINCH → another prompt/banner
-            // stamped into scrollback. We don't want that. Resize is only
-            // interesting when the user rotates the device, which
-            // changes UIScreen.main.bounds — hook that via orientation
-            // notification below rather than chasing SwiftUI layout wobble.
-            .onReceive(NotificationCenter.default.publisher(
-                for: UIDevice.orientationDidChangeNotification
-            )) { _ in
-                updateTmuxPaneSize(outputSize: outputSize)
+        .background(AppTheme.background)
+        .overlay(alignment: .top) {
+            if let msg = toastMessage {
+                Text(msg)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85).cornerRadius(8))
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onAppear {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            withAnimation { toastMessage = nil }
+                        }
+                    }
             }
         }
-        .background(AppTheme.background)
+        .animation(.easeInOut(duration: 0.25), value: toastMessage)
         .onAppear {
             pollTarget = activeWindowIndex
             startPolling()
@@ -457,6 +493,21 @@ struct SplitTerminalView: View {
                 reason: "tab-switch/\(tabResult.reason)",
                 evidence: tabResult.evidence, activeTab: newIndex)
             Task { await refreshPane() }
+        }
+        .onChange(of: tmuxWindowIndices) { _, liveIndices in
+            for key in perTabLines.keys where !liveIndices.contains(key) {
+                perTabLines.removeValue(forKey: key)
+            }
+            for key in perTabInput.keys where !liveIndices.contains(key) {
+                perTabInput.removeValue(forKey: key)
+            }
+            for key in sentTextStack.keys where !liveIndices.contains(key) {
+                sentTextStack.removeValue(forKey: key)
+            }
+            for key in perTabPaneHash.keys where !liveIndices.contains(key) {
+                perTabPaneHash.removeValue(forKey: key)
+            }
+            saveDrafts()
         }
         .onReceive(NotificationCenter.default.publisher(for: .paneRefreshRequested)) { note in
             // Silent push or notification tap requested a fresh capture.
@@ -765,6 +816,8 @@ struct SplitTerminalView: View {
             return UIColor(red: 0.88, green: 0.88, blue: 0.88, alpha: 1)
         case .system:
             return UIColor(red: 0.6, green: 0.6, blue: 0.6, alpha: 1)
+        case .superseded:
+            return UIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.5)
         }
     }
 
@@ -824,6 +877,8 @@ struct SplitTerminalView: View {
             return Color(red: 0.88, green: 0.88, blue: 0.88) // light grey (default)
         case .system:
             return Color(red: 0.6, green: 0.6, blue: 0.6) // dim grey
+        case .superseded:
+            return Color(red: 0.5, green: 0.5, blue: 0.5).opacity(0.5) // dimmed
         }
     }
 
@@ -839,13 +894,18 @@ struct SplitTerminalView: View {
         for raw in lines {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
-            // Claude Code renders the user prompt as ❯ (U+276F) or › (U+203A)
-            // followed by U+00A0 or a space. EXCEPTION: Claude's streaming
-            // "Thinking a bit longer…" placeholder also starts with › —
-            // detect by checking for gerund + trailing ellipsis.
+            if trimmed.hasPrefix("SUPERSEDED") {
+                inPrompt = false
+                result.append(.superseded)
+                continue
+            }
+
+            // Claude Code renders the user prompt as ❯ (U+276F) followed
+            // by U+00A0 or a space. Do NOT match "> " or "$ " — those are
+            // ambiguous (markdown blockquotes, shell output) and cause Claude
+            // responses to render as user input (cyan).
             let startsWithChevron = trimmed.hasPrefix("❯")
-            let startsWithShellPrompt = trimmed.hasPrefix("> ") || trimmed.hasPrefix("$ ")
-            if startsWithChevron || startsWithShellPrompt {
+            if startsWithChevron {
                 let afterMarker = String(trimmed.dropFirst())
                     .trimmingCharacters(in: .whitespaces)
                 let isThinkingPlaceholder = afterMarker.hasSuffix("\u{2026}") && (
@@ -1067,20 +1127,22 @@ struct SplitTerminalView: View {
 
     private func riskColor(_ risk: String) -> Color {
         switch risk {
-        case "read-only": return .green
-        case "write-local": return .yellow
+        case "read": return .green
+        case "write_local": return .yellow
         case "external": return .orange
         case "destructive": return .red
+        case "neutral": return .gray
         default: return .gray
         }
     }
 
     private func riskLabel(_ risk: String) -> String {
         switch risk {
-        case "read-only": return "READ ONLY"
-        case "write-local": return "LOCAL WRITE"
+        case "read": return "READ ONLY"
+        case "write_local": return "LOCAL WRITE"
         case "external": return "EXTERNAL"
         case "destructive": return "DESTRUCTIVE"
+        case "neutral": return "NEUTRAL"
         default: return risk.uppercased()
         }
     }
@@ -1212,14 +1274,22 @@ struct SplitTerminalView: View {
                 inputFocused = true
                 Task {
                     _ = await httpSendKey("Up", window: window)
-                    // Only clear Claude Code's editor when iOS has the text
-                    // safely restored. If recalled is nil (empty iOS stack,
-                    // e.g. post-restart while CC's queue has items), Up alone
-                    // recalls into CC's editor where the user can still see
-                    // and edit it via tmux — sending C-u here would destroy
-                    // the message with no iOS-side recovery.
                     if recalled != nil {
                         _ = await httpSendKey("C-u", window: window)
+                    } else if commandRunner.isConnected {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        let pane = await commandRunner.captureTmuxPane(target: "mobile:\(window)", lines: 5)
+                        let lastLine = pane.components(separatedBy: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+                        let scraped = lastLine
+                            .replacingOccurrences(of: "^[>$#%]\\s*", with: "", options: .regularExpression)
+                            .trimmingCharacters(in: .whitespaces)
+                        if !scraped.isEmpty {
+                            await MainActor.run {
+                                perTabInput[window] = scraped
+                                saveDrafts()
+                            }
+                            _ = await httpSendKey("C-u", window: window)
+                        }
                     }
                     fastPollUntil = Date().addingTimeInterval(5)
                     await refreshPane()
@@ -1364,6 +1434,7 @@ struct SplitTerminalView: View {
     /// clears the consumption queue so the same paths don't fire twice.
     private func consumeUploadedPaths(_ paths: [String]) {
         guard !paths.isEmpty else { return }
+        pendingPathsToConsume = []
         let pathsText = paths.joined(separator: " ")
         let currentInput = perTabInput[activeWindowIndex] ?? ""
         let prose = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1375,9 +1446,6 @@ struct SplitTerminalView: View {
             Task {
                 await httpSendText(pathsText + " ", window: window)
             }
-        }
-        DispatchQueue.main.async {
-            self.pendingPathsToConsume = []
         }
     }
 
@@ -1419,13 +1487,16 @@ struct SplitTerminalView: View {
         }
 
         Task {
-            await httpSendText(textToSend, window: window)
-            await httpSendEnter(window: window)
+            let textOk = await httpSendText(textToSend, window: window)
+            let enterOk = textOk ? await httpSendEnter(window: window) : false
             isSending = false
+            if !textOk || !enterOk {
+                perTabInput[activeWindowIndex] = textToSend
+                toastMessage = "Send failed — check connection"
+                return
+            }
             fastPollUntil = Date().addingTimeInterval(30)
             await refreshPane()
-
-            // Tell server to watch for Claude's response and push-notify when done
             triggerResponseWatch()
         }
     }
@@ -1507,11 +1578,12 @@ struct SplitTerminalView: View {
             }
         }
 
-        // Always re-run prompt-option detection on the active tab — even when
-        // the pane hash is unchanged — because `promptOptions` is view-scoped
-        // (not per-tab) and can be left stale by a tab switch. Detection is
-        // cheap (25-line walk).
-        if capturedIndex == pollTarget {
+        // Re-run prompt-option detection on the active tab, but only when
+        // the typed contract (pendingApproval) is not active. When the server
+        // supplies a structured prompt via /tmux-windows, the typed contract
+        // is the single source of truth — the scraper would only produce
+        // stale or conflicting results.
+        if capturedIndex == pollTarget && !pendingApproval {
             let result = detectPromptOptionsWithReason(perTabLines[capturedIndex] ?? [])
             let prevOpts = promptOptions
             if result.options != promptOptions {

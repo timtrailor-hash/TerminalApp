@@ -13,6 +13,8 @@ final class SSHCommandRunner: ObservableObject {
     private var outputBuffer = ""
     private var pendingContinuation: CheckedContinuation<String, Never>?
     private let marker = "___END_CMD_\(UUID().uuidString.prefix(8))___"
+    private var commandQueue: [(String, CheckedContinuation<String, Never>)] = []
+    private var isRunningCommand = false
 
     func connect(host: String, username: String, password: String) async {
         ssh.onDataReceived = { [weak self] data in
@@ -33,14 +35,47 @@ final class SSHCommandRunner: ObservableObject {
         }
     }
 
-    /// Run a command and return its output.
+    /// Run a command and return its output, with a 10s timeout.
+    /// Serialized: concurrent callers queue behind the running command.
     func run(_ command: String) async -> String {
         guard ssh.isConnected else { return "" }
 
-        return await withCheckedContinuation { continuation in
+        if isRunningCommand {
+            return await withCheckedContinuation { continuation in
+                commandQueue.append((command, continuation))
+            }
+        }
+
+        return await executeCommand(command)
+    }
+
+    private func executeCommand(_ command: String) async -> String {
+        isRunningCommand = true
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             outputBuffer = ""
             pendingContinuation = continuation
             ssh.sendString("\(command); echo '\(marker)'\n")
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard let self, self.pendingContinuation != nil else { return }
+                cmdLog.warning("Command timed out after 10s: \(command.prefix(80))")
+                self.pendingContinuation?.resume(returning: "")
+                self.pendingContinuation = nil
+                self.outputBuffer = ""
+            }
+        }
+        isRunningCommand = false
+        drainQueue()
+        return result
+    }
+
+    private func drainQueue() {
+        guard !commandQueue.isEmpty, !isRunningCommand else { return }
+        let (nextCommand, nextContinuation) = commandQueue.removeFirst()
+        Task {
+            let result = await executeCommand(nextCommand)
+            nextContinuation.resume(returning: result)
         }
     }
 
