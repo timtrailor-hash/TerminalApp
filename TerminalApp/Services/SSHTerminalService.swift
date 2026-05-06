@@ -369,9 +369,10 @@ private final class SSHConnection {
 
     func resize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, let sessionChannel else { return }
-        lastCols = cols
-        lastRows = rows
-        sessionChannel.eventLoop.execute {
+        sessionChannel.eventLoop.execute { [weak self] in
+            guard let self else { return }
+            self.lastCols = cols
+            self.lastRows = rows
             let event = SSHChannelRequestEvent.WindowChangeRequest(
                 terminalCharacterWidth: cols,
                 terminalRowHeight: rows,
@@ -398,17 +399,18 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
-        // Resend the current window size every 30s. When cols/rows match the
-        // server's last-known values, OpenSSH treats this as a no-op (no
-        // SIGWINCH delivered to the foreground process). This generates real
-        // SSH traffic (SSH_MSG_CHANNEL_REQUEST "window-change") that keeps
-        // NAT/firewall sessions alive, unlike zero-byte channel writes which
-        // violate the SSH spec. SO_KEEPALIVE on the socket is set as a
-        // secondary defence but its default interval (~2h) is too long to
-        // prevent carrier-grade NAT timeouts.
+        // Resend the current window size every 15s. On macOS/Darwin servers,
+        // the kernel's TIOCSWINSZ handler (tty_ioctl.c) does a bcmp before
+        // pgsignal, so same-dimension requests are true no-ops (no SIGWINCH).
+        // NOTE: Linux kernels do NOT have this guard and WILL deliver SIGWINCH
+        // on every same-size request. This keepalive is only safe for the Mac
+        // Mini (Darwin) target. If the app ever connects to Linux SSH servers,
+        // switch to a different keepalive mechanism.
+        // SO_KEEPALIVE on the socket is set as a secondary defence but its
+        // default interval (~2h) is too long for carrier-grade NAT timeouts.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
-            initialDelay: .seconds(30),
-            delay: .seconds(30)
+            initialDelay: .seconds(15),
+            delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
             let event = SSHChannelRequestEvent.WindowChangeRequest(
