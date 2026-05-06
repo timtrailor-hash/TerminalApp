@@ -15,7 +15,6 @@ extension Notification.Name {
 
 @main
 struct TerminalApp: App {
-    @StateObject private var server = ServerConnection()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
@@ -23,11 +22,10 @@ struct TerminalApp: App {
             NavigationStack {
                 TerminalView()
             }
-            .environmentObject(server)
+            .environmentObject(appDelegate.serverConnection)
             .preferredColorScheme(.dark)
             .onAppear {
-                appDelegate.server = server
-                LiveActivityManager.shared.server = server
+                LiveActivityManager.shared.server = appDelegate.serverConnection
                 LiveActivityManager.shared.startObservers()
             }
         }
@@ -36,7 +34,8 @@ struct TerminalApp: App {
 
 /// AppDelegate to handle push notification registration.
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    var server: ServerConnection?
+    let serverConnection = ServerConnection()
+    var server: ServerConnection? { serverConnection }
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {

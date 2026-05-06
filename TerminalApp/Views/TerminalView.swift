@@ -103,6 +103,7 @@ struct TerminalView: View {
     @State private var renameText: String = ""
     @State private var showRenameAlert: Bool = false
     @State private var tmuxPollTimer: Timer?
+    @State private var tmuxPollFailed = false
     @State private var isExporting = false
     @State private var exportStatus: String?
     @State private var exportStatusIsError = false
@@ -144,7 +145,15 @@ struct TerminalView: View {
         VStack(spacing: 0) {
             // Tmux window tab bar
             if ssh.isConnected && !tmuxWindows.isEmpty {
-                tmuxTabBar
+                HStack(spacing: 4) {
+                    tmuxTabBar
+                    if tmuxPollFailed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.orange)
+                            .padding(.trailing, 8)
+                    }
+                }
             }
 
             ZStack {
@@ -167,7 +176,8 @@ struct TerminalView: View {
                             pendingPromptType: activeWin?.pendingPromptType ?? "",
                             pendingOptions: activeWin?.pendingOptions ?? [],
                             onCapturedText: { lastCapturedText = $0 },
-                            pendingPathsToConsume: $pendingPathsToConsume
+                            pendingPathsToConsume: $pendingPathsToConsume,
+                            tmuxWindowIndices: Set(tmuxWindows.map(\.index))
                         )
                     } else {
                         SwiftTermContainer(ssh: ssh, terminalTitle: $terminalTitle, terminalViewRef: $terminalViewRef)
@@ -369,6 +379,9 @@ struct TerminalView: View {
         }
         .onAppear {
             autoConnect()
+            if ssh.isConnected && tmuxPollTimer == nil {
+                startTmuxPolling()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -377,18 +390,9 @@ struct TerminalView: View {
         }
         .onChange(of: ssh.isConnected) { _, connected in
             if connected {
-                // Start polling tmux windows after a short delay for tmux to be ready
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { startTmuxPolling() }
             } else {
                 stopTmuxPolling()
-            }
-        }
-        .onAppear {
-            // If SwiftUI re-instantiated the view (or the previous timer was
-            // invalidated by a UI event), kick polling back on so the tab
-            // bar doesn't silently freeze.
-            if ssh.isConnected && tmuxPollTimer == nil {
-                startTmuxPolling()
             }
         }
         .onDisappear {
@@ -606,15 +610,6 @@ struct TerminalView: View {
 
     private func pollTmuxWindows() {
         guard ssh.isConnected else { return }
-        if tmuxPollTimer == nil {
-            // Something invalidated our timer without us restarting; the tab
-            // bar would otherwise freeze. Arm a fresh one inline.
-            let t = Timer(timeInterval: 3, repeats: true) { _ in
-                pollTmuxWindows()
-            }
-            RunLoop.main.add(t, forMode: .common)
-            tmuxPollTimer = t
-        }
         guard let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data = data else { return }
@@ -642,14 +637,21 @@ struct TerminalView: View {
                 }
             }
 
-            // Decode via the canonical TimSharedKit v1 typed contract.
-            // The legacy JSONSerialization parser was removed after
-            // the server's v1 emission was activated (emit_v1_contracts
-            // flag, 2026-05-05). If decode fails (schema drift, network
-            // corruption), we silently skip — same as the old fallback.
-            guard let typed = try? JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data),
-                  typed.schemaVersion == TimSharedKit.ContractsSchemaVersion else { return }
-            applyWindows(typed.windows.map(translateContractsTmuxWindow))
+            do {
+                let typed = try JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data)
+                guard typed.schemaVersion == TimSharedKit.ContractsSchemaVersion else {
+                    let raw = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+                    termLog.error("tmux-windows schema mismatch (got \(typed.schemaVersion), want \(TimSharedKit.ContractsSchemaVersion)): \(raw)")
+                    DispatchQueue.main.async { self.tmuxPollFailed = true }
+                    return
+                }
+                DispatchQueue.main.async { self.tmuxPollFailed = false }
+                applyWindows(typed.windows.map(translateContractsTmuxWindow))
+            } catch {
+                let raw = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+                termLog.error("tmux-windows decode failed: \(error.localizedDescription) raw: \(raw)")
+                DispatchQueue.main.async { self.tmuxPollFailed = true }
+            }
         }.resume()
     }
 
@@ -771,22 +773,42 @@ struct TerminalView: View {
     // MARK: - File Upload
 
     private func loadSelectedPhotos(_ items: [PhotosPickerItem]) async {
+        var failCount = 0
         for item in items {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               let uiImage = UIImage(data: data) {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    failCount += 1
+                    continue
+                }
+                guard let uiImage = UIImage(data: data) else {
+                    failCount += 1
+                    continue
+                }
                 let thumb = uiImage.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? uiImage
                 let jpegData = uiImage.jpegData(compressionQuality: 0.8) ?? data
                 await MainActor.run {
                     pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData))
                 }
+            } catch {
+                failCount += 1
             }
         }
-        await MainActor.run { selectedPhotos = [] }
+        await MainActor.run {
+            selectedPhotos = []
+            if failCount > 0 {
+                exportStatusIsError = true
+                exportStatus = "\(failCount) photo(s) failed to load"
+            }
+        }
     }
 
     private func addCapturedImage(_ image: UIImage) {
         let thumb = image.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? image
-        let jpegData = image.jpegData(compressionQuality: 0.8) ?? Data()
+        guard let jpegData = image.jpegData(compressionQuality: 0.8), !jpegData.isEmpty else {
+            exportStatusIsError = true
+            exportStatus = "Camera image could not be compressed"
+            return
+        }
         pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData))
     }
 
@@ -811,7 +833,11 @@ struct TerminalView: View {
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         let thumb = image.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? image
-        let jpegData = image.jpegData(compressionQuality: 0.8) ?? Data()
+        guard let jpegData = image.jpegData(compressionQuality: 0.8), !jpegData.isEmpty else {
+            exportStatusIsError = true
+            exportStatus = "Screenshot capture failed"
+            return
+        }
         pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData, filename: "screenshot.jpg"))
     }
 
