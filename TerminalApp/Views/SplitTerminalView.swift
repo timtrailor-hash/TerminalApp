@@ -449,28 +449,6 @@ struct SplitTerminalView: View {
 
     // MARK: - Output Section
 
-    /// Build a single AttributedString containing every line in the pane,
-    /// each carrying its classifier colour as a foreground attribute on its
-    /// substring run. Rendering this as one `Text(...)` (instead of one
-    /// Text per line in a LazyVStack) is what unlocks cross-line selection
-    /// on iOS — SwiftUI only permits selection within one Text view, so we
-    /// collapse all the lines into that single view while preserving the
-    /// per-run colours via AttributedString.
-    private func buildPaneAttributedText(_ lines: [PaneLine]) -> AttributedString {
-        var result = AttributedString("")
-        for (idx, line) in lines.enumerated() {
-            // Empty lines still need a substring so the newline renders.
-            let raw = line.text.isEmpty ? " " : line.text
-            var run = AttributedString(raw)
-            run.foregroundColor = colorFor(line.lineType)
-            result.append(run)
-            if idx < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
-    }
-
     /// Detect an ACTIVE Claude Code permission prompt in the current pane.
     /// Must satisfy all of:
     ///   1. Options appear in the last 25 lines (not older scrollback).
@@ -768,19 +746,6 @@ struct SplitTerminalView: View {
     }
 
     // MARK: - Color coding
-
-    private func colorFor(_ type: LineType) -> Color {
-        switch type {
-        case .userInput:
-            return Color(red: 0.4, green: 0.8, blue: 1.0) // bright cyan
-        case .claudeText:
-            return Color(red: 0.88, green: 0.88, blue: 0.88) // light grey (default)
-        case .system:
-            return Color(red: 0.6, green: 0.6, blue: 0.6) // dim grey
-        case .superseded:
-            return Color(red: 0.5, green: 0.5, blue: 0.5).opacity(0.5) // dimmed
-        }
-    }
 
     /// Classify a full pane in one pass so prompt-continuation lines inherit the
     /// userInput colour. Per-line classification breaks colouring when Claude
