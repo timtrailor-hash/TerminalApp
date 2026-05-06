@@ -51,29 +51,31 @@ final class SSHCommandRunner: ObservableObject {
 
     private func executeCommand(_ command: String) async -> String {
         isRunningCommand = true
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+        defer {
+            isRunningCommand = false
+            drainQueue()
+        }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             outputBuffer = ""
             pendingContinuation = continuation
             ssh.sendString("\(command); echo '\(marker)'\n")
 
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
-                guard let self, self.pendingContinuation != nil else { return }
+                guard let self else { return }
+                guard let cont = self.pendingContinuation else { return }
                 cmdLog.warning("Command timed out after 10s: \(command.prefix(80))")
-                self.pendingContinuation?.resume(returning: "")
                 self.pendingContinuation = nil
                 self.outputBuffer = ""
+                cont.resume(returning: "")
             }
         }
-        isRunningCommand = false
-        drainQueue()
-        return result
     }
 
     private func drainQueue() {
         guard !commandQueue.isEmpty, !isRunningCommand else { return }
         let (nextCommand, nextContinuation) = commandQueue.removeFirst()
-        Task {
+        Task { @MainActor in
             let result = await executeCommand(nextCommand)
             nextContinuation.resume(returning: result)
         }

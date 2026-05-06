@@ -278,20 +278,19 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
+        // Send a zero-byte channel data flush every 15s. This keeps the TCP
+        // connection alive and prevents NAT/firewall idle timeouts without
+        // triggering SIGWINCH (which WindowChangeRequest would) or polluting
+        // the shell's stdin. The server reads and discards the empty write.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
             initialDelay: .seconds(15),
             delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
-            let event = SSHChannelRequestEvent.WindowChangeRequest(
-                terminalCharacterWidth: self.lastCols,
-                terminalRowHeight: self.lastRows,
-                terminalPixelWidth: 0,
-                terminalPixelHeight: 0
-            )
-            sc.triggerUserOutboundEvent(event, promise: nil)
+            let buffer = sc.allocator.buffer(capacity: 0)
+            sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
         }
-        sshLog.info("SSH keepalive started (15s window-change interval)")
+        sshLog.info("SSH keepalive started (15s interval)")
     }
 
     private func stopKeepalive() {

@@ -1434,8 +1434,9 @@ struct SplitTerminalView: View {
     /// clears the consumption queue so the same paths don't fire twice.
     private func consumeUploadedPaths(_ paths: [String]) {
         guard !paths.isEmpty else { return }
+        let consumed = paths
         pendingPathsToConsume = []
-        let pathsText = paths.joined(separator: " ")
+        let pathsText = consumed.joined(separator: " ")
         let currentInput = perTabInput[activeWindowIndex] ?? ""
         let prose = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prose.isEmpty {
@@ -1444,7 +1445,10 @@ struct SplitTerminalView: View {
         } else {
             let window = activeWindowIndex
             Task {
-                await httpSendText(pathsText + " ", window: window)
+                let ok = await httpSendText(pathsText + " ", window: window)
+                if !ok {
+                    toastMessage = "Upload paths failed to send"
+                }
             }
         }
     }
