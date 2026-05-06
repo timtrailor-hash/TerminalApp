@@ -6,11 +6,43 @@ import os
 
 private let sshLog = Logger(subsystem: "com.timtrailor.terminal", category: "ssh")
 
-// MARK: - Host Key Validation (accept all — trusted LAN)
+// MARK: - Host Key Validation (trust-on-first-use)
 
-private final class AcceptAllHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
+final class TOFUHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
+    private let host: String
+    private static let defaultsPrefix = "SSHHostKey."
+
+    init(host: String) {
+        self.host = host
+    }
+
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        validationCompletePromise.succeed(())
+        let key = Self.defaultsPrefix + host
+        let keyString = String(openSSHPublicKey: hostKey)
+
+        if let saved = UserDefaults.standard.string(forKey: key) {
+            if saved == keyString {
+                validationCompletePromise.succeed(())
+            } else {
+                sshLog.error("Host key mismatch for \(self.host) — possible MITM. Saved key differs from presented key.")
+                validationCompletePromise.fail(SSHHostKeyError.mismatch(host: self.host))
+            }
+        } else {
+            sshLog.info("First connection to \(self.host) — pinning host key")
+            UserDefaults.standard.set(keyString, forKey: key)
+            validationCompletePromise.succeed(())
+        }
+    }
+}
+
+enum SSHHostKeyError: Error, LocalizedError {
+    case mismatch(host: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .mismatch(let host):
+            return "Host key for \(host) has changed. This could indicate a man-in-the-middle attack."
+        }
     }
 }
 
@@ -195,7 +227,7 @@ private final class SSHConnection {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.group = group
 
-        let serverAuthDelegate = AcceptAllHostKeysDelegate()
+        let serverAuthDelegate = TOFUHostKeysDelegate(host: host)
         let userAuthDelegate = SimplePasswordDelegate(username: username, password: password)
 
         let bootstrap = ClientBootstrap(group: group)
