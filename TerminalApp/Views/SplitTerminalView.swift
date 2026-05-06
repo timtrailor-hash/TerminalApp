@@ -1210,15 +1210,37 @@ struct SplitTerminalView: View {
     /// fall back to the conversation server's HTTP capture endpoint.
     /// SSH-disconnected restart was the original blocker for queue-edit
     /// recall: the server poll path always works as long as the iOS
-    /// session is alive.
+    /// session is alive. The SSH leg is raced against a 3s timeout so a
+    /// stale-but-`isConnected` connection (post-sleep, flaky Wi-Fi)
+    /// can't block the fallback for the OS-default ~75s TCP timeout.
     private func captureRecentPane(window: Int) async -> String? {
         if commandRunner.isConnected {
-            let pane = await commandRunner.captureTmuxPane(
-                target: "mobile:\(window)", lines: 12
-            )
-            if !pane.isEmpty { return pane }
+            let pane = await withTimeout(seconds: 3) {
+                await commandRunner.captureTmuxPane(
+                    target: "mobile:\(window)", lines: 12
+                )
+            }
+            if let pane, !pane.isEmpty { return pane }
         }
         return await model.httpCaptureTmux(window: window)
+    }
+
+    /// Race an async operation against a timeout. Returns nil if the
+    /// timeout fires first. Used to bound SSH calls so a stale TCP
+    /// connection can't deadline-lock a UI flow.
+    private func withTimeout<T: Sendable>(
+        seconds: Double, _ op: @Sendable @escaping () async -> T
+    ) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await op() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Find the recalled-prompt text inside Claude Code's box-bordered

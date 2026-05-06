@@ -27,10 +27,18 @@ final class TerminalSessionModel: ObservableObject {
     }
 
     func httpCaptureTmux(window: Int) async -> String? {
+        guard !baseURL.isEmpty else {
+            sessionLog.debug("[capture] skipped: server connection not attached yet")
+            return nil
+        }
         guard let url = URL(string: "\(baseURL)/tmux-capture?window=\(window)&lines=500") else { return nil }
         let request = authedRequest(url: url)
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                sessionLog.error("[capture] HTTP \(http.statusCode) for window=\(window)")
+                return nil
+            }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let content = json["content"] as? String else { return nil }
             return content
