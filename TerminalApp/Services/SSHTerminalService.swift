@@ -65,6 +65,7 @@ enum HostKeyStore {
             kSecAttrAccount as String: host,
         ]
         SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: "SSHHostKey.\(host)")
         sshLog.info("Cleared pinned host key for \(host)")
     }
 
