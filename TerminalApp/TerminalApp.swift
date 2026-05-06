@@ -114,6 +114,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         }
 
         // Request permission and register for remote notifications
+        #if !targetEnvironment(simulator)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if granted {
                 DispatchQueue.main.async {
@@ -121,6 +122,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 }
             }
         }
+        #endif
 
         // Cold-launch via notification tap: seed the deep-link so the root
         // view routes to the right tab once the scene is ready.

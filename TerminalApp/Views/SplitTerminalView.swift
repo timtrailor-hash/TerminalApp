@@ -725,11 +725,15 @@ struct SplitTerminalView: View {
         let result = NSMutableAttributedString()
         for (idx, line) in lines.enumerated() {
             let raw = line.text.isEmpty ? " " : line.text
-            let attrs: [NSAttributedString.Key: Any] = [
+            var attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: uiColorFor(line.lineType),
                 .paragraphStyle: para,
             ]
+            if line.lineType == .superseded {
+                attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attrs[.strikethroughColor] = UIColor.gray.withAlphaComponent(0.6)
+            }
             result.append(NSAttributedString(string: raw, attributes: attrs))
             if idx < lines.count - 1 {
                 result.append(NSAttributedString(string: "\n", attributes: attrs))
@@ -787,13 +791,18 @@ struct SplitTerminalView: View {
         var result: [LineType] = []
         result.reserveCapacity(lines.count)
         var inPrompt = false
-        for raw in lines {
+        var gateMarkerIndices: [Int] = []
+        for (lineIdx, raw) in lines.enumerated() {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
                 inPrompt = false
                 result.append(.superseded)
                 continue
+            }
+
+            if trimmed.contains("[response_gate]") {
+                gateMarkerIndices.append(lineIdx)
             }
 
             // Claude Code renders the user prompt as ❯ (U+276F) followed
@@ -864,6 +873,17 @@ struct SplitTerminalView: View {
 
             result.append(.claudeText)
         }
+
+        for markerIdx in gateMarkerIndices {
+            result[markerIdx] = .superseded
+            var j = markerIdx - 1
+            while j >= 0 {
+                if result[j] == .userInput { break }
+                result[j] = .superseded
+                j -= 1
+            }
+        }
+
         return result
     }
 
