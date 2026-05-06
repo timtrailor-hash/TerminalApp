@@ -1157,13 +1157,22 @@ struct SplitTerminalView: View {
                     _ = await model.httpSendKey("Up", window: window)
                     if recalled != nil {
                         _ = await model.httpSendKey("C-u", window: window)
-                    } else if commandRunner.isConnected {
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        let pane = await commandRunner.captureTmuxPane(target: "mobile:\(window)", lines: 5)
-                        let lastLine = pane.components(separatedBy: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
-                        let scraped = lastLine
-                            .replacingOccurrences(of: "^[>$#%]\\s*", with: "", options: .regularExpression)
-                            .trimmingCharacters(in: .whitespaces)
+                    } else {
+                        // Stack empty (post-restart, or messages sent before
+                        // this build). Up has populated Claude Code's
+                        // box-bordered prompt area in tmux; scrape it back
+                        // into iOS so the user can edit. Capture twice in
+                        // case the first poll lands before tmux re-renders.
+                        var scraped = ""
+                        for delayMs in [250, 400] {
+                            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                            if let pane = await captureRecentPane(window: window) {
+                                if let text = extractRecalledPrompt(from: pane), !text.isEmpty {
+                                    scraped = text
+                                    break
+                                }
+                            }
+                        }
                         if !scraped.isEmpty {
                             await MainActor.run {
                                 perTabInput[window] = scraped
@@ -1195,6 +1204,54 @@ struct SplitTerminalView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+    }
+
+    /// Pull the tail of the tmux pane via SSH if connected, otherwise
+    /// fall back to the conversation server's HTTP capture endpoint.
+    /// SSH-disconnected restart was the original blocker for queue-edit
+    /// recall: the server poll path always works as long as the iOS
+    /// session is alive.
+    private func captureRecentPane(window: Int) async -> String? {
+        if commandRunner.isConnected {
+            let pane = await commandRunner.captureTmuxPane(
+                target: "mobile:\(window)", lines: 12
+            )
+            if !pane.isEmpty { return pane }
+        }
+        return await model.httpCaptureTmux(window: window)
+    }
+
+    /// Find the recalled-prompt text inside Claude Code's box-bordered
+    /// input area. The TUI renders queued messages as
+    ///   ╭───────────────────╮
+    ///   │ > some queued msg │
+    ///   ╰───────────────────╯
+    /// after Up is pressed. Walk the pane bottom-up looking for that
+    /// `│ > … │` line and return the trimmed text. Returns nil if no
+    /// box-bordered prompt is present.
+    private func extractRecalledPrompt(from pane: String) -> String? {
+        let lines = pane.components(separatedBy: "\n")
+        for raw in lines.reversed() {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("│"), trimmed.hasSuffix("│") else { continue }
+            var inner = String(trimmed.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespaces)
+            // Strip leading prompt marker (`>` or `❯`) plus optional space.
+            if inner.hasPrefix("> ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix(">") {
+                inner = String(inner.dropFirst())
+            } else if inner.hasPrefix("❯ ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix("❯") {
+                inner = String(inner.dropFirst())
+            } else {
+                continue
+            }
+            let text = inner.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { return text }
+        }
+        return nil
     }
 
     // MARK: - Prompt Option Buttons
