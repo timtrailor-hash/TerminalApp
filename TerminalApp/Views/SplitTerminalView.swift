@@ -1206,41 +1206,30 @@ struct SplitTerminalView: View {
         .padding(.vertical, 4)
     }
 
-    /// Pull the tail of the tmux pane via SSH if connected, otherwise
-    /// fall back to the conversation server's HTTP capture endpoint.
-    /// SSH-disconnected restart was the original blocker for queue-edit
-    /// recall: the server poll path always works as long as the iOS
-    /// session is alive. The SSH leg is raced against a 3s timeout so a
-    /// stale-but-`isConnected` connection (post-sleep, flaky Wi-Fi)
-    /// can't block the fallback for the OS-default ~75s TCP timeout.
+    /// Pull the tail of the tmux pane via the conversation server's
+    /// HTTP capture endpoint. The HTTP path is the same one the polling
+    /// loop already uses, so it works regardless of SSH state and
+    /// without the OS-default 75s TCP timeout cliff that an SSH-first
+    /// design has on a stale-but-`isConnected` socket.
     private func captureRecentPane(window: Int) async -> String? {
-        if commandRunner.isConnected {
-            let pane = await withTimeout(seconds: 3) {
-                await commandRunner.captureTmuxPane(
-                    target: "mobile:\(window)", lines: 12
-                )
-            }
-            if let pane, !pane.isEmpty { return pane }
-        }
-        return await model.httpCaptureTmux(window: window)
+        await model.httpCaptureTmux(window: window)
     }
 
-    /// Race an async operation against a timeout. Returns nil if the
-    /// timeout fires first. Used to bound SSH calls so a stale TCP
-    /// connection can't deadline-lock a UI flow.
-    private func withTimeout<T: Sendable>(
-        seconds: Double, _ op: @Sendable @escaping () async -> T
-    ) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { await op() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
+    /// Strip ANSI CSI escape sequences (colours, cursor moves) from a
+    /// pane line so prefix/suffix checks against the box-drawing
+    /// characters work even when Claude Code emits coloured borders.
+    /// Pattern: ESC `[` … final-byte where the final byte is in the
+    /// 0x40-0x7E range. We deliberately do not handle every CSI variant
+    /// — just the SGR / cursor cases tmux capture-pane is likely to
+    /// produce.
+    private static let ansiCSIRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[\\x40-\\x7E]")
+    }()
+
+    private func stripANSI(_ raw: String) -> String {
+        guard let regex = Self.ansiCSIRegex else { return raw }
+        let range = NSRange(raw.startIndex..., in: raw)
+        return regex.stringByReplacingMatches(in: raw, range: range, withTemplate: "")
     }
 
     /// Find the recalled-prompt text inside Claude Code's box-bordered
@@ -1248,17 +1237,18 @@ struct SplitTerminalView: View {
     ///   ╭───────────────────╮
     ///   │ > some queued msg │
     ///   ╰───────────────────╯
-    /// after Up is pressed. Walk the pane bottom-up looking for that
-    /// `│ > … │` line and return the trimmed text. Returns nil if no
-    /// box-bordered prompt is present.
+    /// after Up is pressed. Walk the pane bottom-up; require a `│ > … │`
+    /// line that has a `╰` border within 3 lines below it (anchors the
+    /// match to a real prompt frame, not arbitrary tool-output rows
+    /// that happen to start with `>`). Returns nil if no anchored prompt
+    /// is present.
     private func extractRecalledPrompt(from pane: String) -> String? {
-        let lines = pane.components(separatedBy: "\n")
-        for raw in lines.reversed() {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let lines = pane.components(separatedBy: "\n").map(stripANSI)
+        for idx in (0..<lines.count).reversed() {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("│"), trimmed.hasSuffix("│") else { continue }
             var inner = String(trimmed.dropFirst().dropLast())
                 .trimmingCharacters(in: .whitespaces)
-            // Strip leading prompt marker (`>` or `❯`) plus optional space.
             if inner.hasPrefix("> ") {
                 inner = String(inner.dropFirst(2))
             } else if inner.hasPrefix(">") {
@@ -1270,6 +1260,18 @@ struct SplitTerminalView: View {
             } else {
                 continue
             }
+            // Anchor: a real prompt frame has `╰` within the next few
+            // lines. Without this, any `│ > foo │`-shaped row in tool
+            // output would match.
+            let lookahead = min(idx + 4, lines.count)
+            var anchored = false
+            if idx + 1 < lookahead {
+                for j in (idx + 1)..<lookahead {
+                    let t = lines[j].trimmingCharacters(in: .whitespaces)
+                    if t.hasPrefix("╰") { anchored = true; break }
+                }
+            }
+            guard anchored else { continue }
             let text = inner.trimmingCharacters(in: .whitespaces)
             if !text.isEmpty { return text }
         }
