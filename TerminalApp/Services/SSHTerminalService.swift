@@ -48,8 +48,11 @@ enum HostKeyStore {
         let udKey = "SSHHostKey.\(host)"
         if let legacy = UserDefaults.standard.string(forKey: udKey) {
             sshLog.info("Migrating host key for \(host) from UserDefaults to Keychain")
-            save(host: host, key: legacy)
-            UserDefaults.standard.removeObject(forKey: udKey)
+            if save(host: host, key: legacy) {
+                UserDefaults.standard.removeObject(forKey: udKey)
+            } else {
+                sshLog.warning("Keychain migration failed for \(host), keeping UserDefaults entry")
+            }
             return legacy
         }
         return nil
@@ -65,13 +68,19 @@ enum HostKeyStore {
         sshLog.info("Cleared pinned host key for \(host)")
     }
 
-    static func clearAll() {
+    @discardableResult
+    static func clearAll() -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
-        SecItemDelete(query as CFDictionary)
-        sshLog.info("Cleared all pinned host keys")
+        let status = SecItemDelete(query as CFDictionary)
+        if status == errSecSuccess || status == errSecItemNotFound {
+            sshLog.info("Cleared all pinned host keys")
+            return true
+        }
+        sshLog.error("Failed to clear host keys: OSStatus \(status)")
+        return false
     }
 }
 

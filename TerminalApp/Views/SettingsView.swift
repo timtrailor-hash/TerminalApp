@@ -62,18 +62,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .confirmationDialog(
-                    "Clear all pinned SSH host keys?",
-                    isPresented: $showClearConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Clear All Keys", role: .destructive) {
-                        HostKeyStore.clearAll()
-                        hostKeysCleared = true
-                    }
-                } message: {
-                    Text("You will be prompted to trust each host again on next connection.")
-                }
             }
 
             Section("Display") {
@@ -99,5 +87,16 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(AppTheme.background)
         .onAppear { hostKeysCleared = false }
+        .confirmationDialog(
+            "Clear all pinned SSH host keys?",
+            isPresented: $showClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All Keys", role: .destructive) {
+                hostKeysCleared = HostKeyStore.clearAll()
+            }
+        } message: {
+            Text("You will be prompted to trust each host again on next connection.")
+        }
     }
 }
