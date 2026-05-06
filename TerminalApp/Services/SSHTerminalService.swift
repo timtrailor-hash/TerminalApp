@@ -85,6 +85,47 @@ enum HostKeyStore {
     }
 }
 
+enum CredentialStore {
+    private static let service = "com.timtrailor.terminal.credentials"
+
+    static func savePassword(_ password: String) {
+        let data = Data(password.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "sshPassword",
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard !password.isEmpty else { return }
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func loadPassword() -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "sshPassword",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data, let pw = String(data: data, encoding: .utf8) {
+            return pw
+        }
+        if let legacy = UserDefaults.standard.string(forKey: "sshPassword"), !legacy.isEmpty {
+            sshLog.info("Migrating SSH password from UserDefaults to Keychain")
+            savePassword(legacy)
+            UserDefaults.standard.removeObject(forKey: "sshPassword")
+            return legacy
+        }
+        return ""
+    }
+}
+
 // MARK: - Host Key Validation (trust-on-first-use)
 
 final class TOFUHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
@@ -421,7 +462,7 @@ private final class SSHConnection {
             )
             sc.triggerUserOutboundEvent(event, promise: nil)
         }
-        sshLog.info("SSH keepalive started (30s window-change interval)")
+        sshLog.info("SSH keepalive started (15s window-change interval)")
     }
 
     private func stopKeepalive() {

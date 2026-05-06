@@ -34,6 +34,7 @@
 		TA000001000025 /* Protobuf_C_.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = TA000002000023 /* Protobuf_C_.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		TA000001000030 /* SplitTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000030 /* SplitTerminalView.swift */; };
 		TA000001000031 /* SSHCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000031 /* SSHCommandRunner.swift */; };
+		TA000001000099 /* TerminalSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA000002000099 /* TerminalSessionModel.swift */; };
 		TAUIT0000000001 /* TerminalAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TAUIT0000000002 /* TerminalAppUITests.swift */; };
 /* End PBXBuildFile section */
 
@@ -102,6 +103,7 @@
 		TA000002000023 /* Protobuf_C_.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Protobuf_C_.xcframework; path = Frameworks/Protobuf_C_.xcframework; sourceTree = SOURCE_ROOT; };
 		TA000002000030 /* SplitTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitTerminalView.swift; sourceTree = "<group>"; };
 		TA000002000031 /* SSHCommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCommandRunner.swift; sourceTree = "<group>"; };
+		TA000002000099 /* TerminalSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSessionModel.swift; sourceTree = "<group>"; };
 		TA000002000040 /* TerminalApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TerminalApp.entitlements; sourceTree = "<group>"; };
 		TA000003000001 /* TerminalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerminalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		TAUIT0000000002 /* TerminalAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TerminalAppUITests.swift; path = TerminalAppUITests/TerminalAppUITests.swift; sourceTree = SOURCE_ROOT; };
@@ -193,6 +195,7 @@
 			children = (
 				TA000002000004 /* SSHTerminalService.swift */,
 				TA000002000031 /* SSHCommandRunner.swift */,
+				TA000002000099 /* TerminalSessionModel.swift */,
 				TA000002000020 /* MoshTerminalService.swift */,
 				TA000002000021 /* MoshServerLauncher.swift */,
 			);
@@ -400,6 +403,7 @@
 				TA000001000021 /* MoshServerLauncher.swift in Sources */,
 				TA000001000030 /* SplitTerminalView.swift in Sources */,
 				TA000001000031 /* SSHCommandRunner.swift in Sources */,
+				TA000001000099 /* TerminalSessionModel.swift in Sources */,
 				91DC6CAF41899E2D394847FC /* ClaudeActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
