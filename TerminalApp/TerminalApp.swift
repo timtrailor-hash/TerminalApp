@@ -142,6 +142,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     func application(_ application: UIApplication,
                      didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        reportPushRender(userInfo, kind: .background)
         if let window = AppDelegate.windowIndex(from: userInfo) {
             NotificationCenter.default.post(name: .paneRefreshRequested,
                                             object: nil,
@@ -197,12 +198,28 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // Even for foreground alerts, kick a pane refresh for the target
         // tab so the user sees Claude's reply without switching away.
         let info = notification.request.content.userInfo
+        reportPushRender(info, kind: .foreground)
         if let window = AppDelegate.windowIndex(from: info) {
             NotificationCenter.default.post(name: .paneRefreshRequested,
                                             object: nil,
                                             userInfo: ["window": window])
         }
         completionHandler([.banner, .sound])
+    }
+
+    /// Posts /events/push-rendered if the notification carries a server-injected
+    /// `_trace_id`. Used by the operator to confirm a push reached the device.
+    private func reportPushRender(_ userInfo: [AnyHashable: Any], kind: PushRenderedKind) {
+        guard let traceId = PushTraceEmitter.traceId(in: userInfo),
+              let server = self.server,
+              let url = URL(string: server.baseURL) else { return }
+        PushTraceEmitter.report(
+            traceId: traceId,
+            bundleID: "com.timtrailor.terminal",
+            kind: kind,
+            serverURL: url,
+            bearerToken: server.authToken.isEmpty ? nil : server.authToken
+        )
     }
 
     // Tap on a delivered notification → deep-link to its tab.
@@ -213,6 +230,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
+        reportPushRender(info, kind: .tap)
         let actionId = response.actionIdentifier
 
         // Map the iOS-side action identifier to the server-side action verb.

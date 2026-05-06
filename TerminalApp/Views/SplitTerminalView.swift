@@ -1425,18 +1425,18 @@ struct SplitTerminalView: View {
         let pathsText = consumed.joined(separator: " ")
         let currentInput = perTabInput[activeWindowIndex] ?? ""
         let prose = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Tim 2026-05-06: do NOT auto-submit on upload. Append the uploaded
+        // paths into the input buffer so the user can edit, add more prose,
+        // or delete the whole thing before tapping Send. The previous behaviour
+        // (auto-submit) shipped a file to Claude before the user was ready and
+        // gave no way to abort the send.
         if !prose.isEmpty {
             perTabInput[activeWindowIndex] = pathsText + " " + prose
-            sendInput()
         } else {
-            let window = activeWindowIndex
-            Task {
-                let ok = await model.httpSendText(pathsText + " ", window: window)
-                if !ok {
-                    toastMessage = "Upload paths failed to send"
-                }
-            }
+            perTabInput[activeWindowIndex] = pathsText + " "
         }
+        saveDrafts()
+        inputFocused = true
     }
 
     private func sendInput() {
