@@ -340,6 +340,7 @@ private final class SSHConnection {
                 }
             }
             .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_KEEPALIVE), value: 1)
             .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
             .connectTimeout(.seconds(15))
 
@@ -368,9 +369,10 @@ private final class SSHConnection {
 
     func resize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, let sessionChannel else { return }
-        lastCols = cols
-        lastRows = rows
-        sessionChannel.eventLoop.execute {
+        sessionChannel.eventLoop.execute { [weak self] in
+            guard let self else { return }
+            self.lastCols = cols
+            self.lastRows = rows
             let event = SSHChannelRequestEvent.WindowChangeRequest(
                 terminalCharacterWidth: cols,
                 terminalRowHeight: rows,
@@ -397,19 +399,29 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
-        // Send a zero-byte channel data flush every 15s. This keeps the TCP
-        // connection alive and prevents NAT/firewall idle timeouts without
-        // triggering SIGWINCH (which WindowChangeRequest would) or polluting
-        // the shell's stdin. The server reads and discards the empty write.
+        // Resend the current window size every 15s. On macOS/Darwin servers,
+        // the kernel's TIOCSWINSZ handler (tty_ioctl.c) does a bcmp before
+        // pgsignal, so same-dimension requests are true no-ops (no SIGWINCH).
+        // NOTE: Linux kernels do NOT have this guard and WILL deliver SIGWINCH
+        // on every same-size request. This keepalive is only safe for the Mac
+        // Mini (Darwin) target. If the app ever connects to Linux SSH servers,
+        // switch to a different keepalive mechanism.
+        // SO_KEEPALIVE on the socket is set as a secondary defence but its
+        // default interval (~2h) is too long for carrier-grade NAT timeouts.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
             initialDelay: .seconds(15),
             delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
-            let buffer = sc.allocator.buffer(capacity: 0)
-            sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
+            let event = SSHChannelRequestEvent.WindowChangeRequest(
+                terminalCharacterWidth: self.lastCols,
+                terminalRowHeight: self.lastRows,
+                terminalPixelWidth: 0,
+                terminalPixelHeight: 0
+            )
+            sc.triggerUserOutboundEvent(event, promise: nil)
         }
-        sshLog.info("SSH keepalive started (15s interval)")
+        sshLog.info("SSH keepalive started (30s window-change interval)")
     }
 
     private func stopKeepalive() {
