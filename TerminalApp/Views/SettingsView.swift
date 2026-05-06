@@ -4,7 +4,7 @@ import TimSharedKit
 struct SettingsView: View {
     @EnvironmentObject var server: ServerConnection
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
-    @AppStorage("sshPassword") private var sshPassword = ""
+    @State private var sshPassword = CredentialStore.loadPassword()
     @AppStorage("useSplitView") private var useSplitView = true
     @State private var hostKeysCleared = false
     @State private var showClearConfirmation = false
@@ -87,6 +87,9 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(AppTheme.background)
         .onAppear { hostKeysCleared = false }
+        .onChange(of: sshPassword) { _, newValue in
+            CredentialStore.savePassword(newValue)
+        }
         .confirmationDialog(
             "Clear all pinned SSH host keys?",
             isPresented: $showClearConfirmation,

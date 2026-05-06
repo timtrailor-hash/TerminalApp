@@ -79,7 +79,7 @@ private struct SelectablePaneView: UIViewRepresentable {
 }
 
 
-private struct PromptOption: Identifiable, Equatable {
+struct PromptOption: Identifiable, Equatable {
     let number: Int
     let label: String
     var id: Int { number }
@@ -99,6 +99,7 @@ struct PaneOption: Codable, Hashable, Identifiable {
 struct SplitTerminalView: View {
     @ObservedObject var commandRunner: SSHCommandRunner
     @ObservedObject var ssh: SSHTerminalService
+    @ObservedObject var model: TerminalSessionModel
     @EnvironmentObject var server: ServerConnection
 
     /// The tmux window index the user is currently viewing. Defaults to 1.
@@ -274,83 +275,7 @@ struct SplitTerminalView: View {
         return f.lineHeight
     }()
 
-    // MARK: - HTTP helpers
-
-    private func httpCaptureTmux(window: Int) async -> String? {
-        guard let url = URL(string: "\(server.baseURL)/tmux-capture?window=\(window)&lines=500") else { return nil }
-        var request = URLRequest(url: url)
-        if !server.authToken.isEmpty {
-            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-        }
-        do {
-            let (data, _) = try await URLSession.shared.data(for: request)
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let content = json["content"] as? String else { return nil }
-            return content
-        } catch {
-            return nil
-        }
-    }
-
-    @discardableResult
-    private func httpSendText(_ text: String, window: Int) async -> Bool {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-text") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !server.authToken.isEmpty {
-            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "window": window])
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            return (200...299).contains(status)
-        } catch {
-            splitLog.error("[send-text] network error: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    @discardableResult
-    private func httpSendEnter(window: Int) async -> Bool {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-enter") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !server.authToken.isEmpty {
-            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["window": window])
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            return (200...299).contains(status)
-        } catch {
-            splitLog.error("[send-enter] network error: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    private func httpSendEscape(window: Int) async {
-        _ = await httpSendKey("Escape", window: window)
-    }
-
-    private func httpTmuxResize(cols: Int, rows: Int) async {
-        guard let url = URL(string: "\(server.baseURL)/tmux-resize") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !server.authToken.isEmpty {
-            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "cols": cols,
-            "rows": rows,
-            "session": "mobile",
-        ])
-        _ = try? await URLSession.shared.data(for: request)
-    }
+    // HTTP helpers live in TerminalSessionModel. All calls go through model.httpXxx().
 
     /// Called from GeometryReader whenever the output pane's size changes.
     /// Recomputes tmux cols/rows from the monospace cell metrics and pushes
@@ -380,7 +305,7 @@ struct SplitTerminalView: View {
         UserDefaults.standard.set(cols, forKey: "TerminalApp.lastPaneCols")
         UserDefaults.standard.set(rows, forKey: "TerminalApp.lastPaneRows")
         Task {
-            await httpTmuxResize(cols: cols, rows: rows)
+            await model.httpTmuxResize(cols: cols, rows: rows)
             // Immediately refetch so the user sees reflowed content without waiting
             // for the next 1.5s poll tick.
             await refreshPane()
@@ -766,7 +691,7 @@ struct SplitTerminalView: View {
             // its current tracker and rejects with 409 if stale —
             // prevents the "digit-lands-in-text-buffer" pollution that
             // happened before this fix.
-            let accepted = await httpSendKey("\(number)", window: window, promptId: answeredId)
+            let accepted = await model.httpSendKey("\(number)", window: window, promptId: answeredId)
             if !accepted {
                 // Tap was stale. Undo the optimistic hide so the bar
                 // comes back and the user sees the current prompt.
@@ -776,35 +701,6 @@ struct SplitTerminalView: View {
             }
             fastPollUntil = Date().addingTimeInterval(10)
             await refreshPane()
-        }
-    }
-
-    /// Returns true if the server accepted the keystroke (200 OK).
-    /// Returns false on 409 stale-guard rejection so the caller can
-    /// revert its optimistic hide.
-    private func httpSendKey(_ key: String, window: Int, promptId: Int = 0) async -> Bool {
-        guard let url = URL(string: "\(server.baseURL)/tmux-send-key") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !server.authToken.isEmpty {
-            request.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
-        }
-        var body: [String: Any] = ["window": window, "key": key]
-        if promptId > 0 { body["promptId"] = promptId }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse {
-                if http.statusCode == 409 {
-                    splitLog.info("[button] tap rejected as stale (promptId=\(promptId))")
-                    return false
-                }
-                return http.statusCode < 400
-            }
-            return true
-        } catch {
-            return false
         }
     }
 
@@ -1273,9 +1169,9 @@ struct SplitTerminalView: View {
                 }
                 inputFocused = true
                 Task {
-                    _ = await httpSendKey("Up", window: window)
+                    _ = await model.httpSendKey("Up", window: window)
                     if recalled != nil {
-                        _ = await httpSendKey("C-u", window: window)
+                        _ = await model.httpSendKey("C-u", window: window)
                     } else if commandRunner.isConnected {
                         try? await Task.sleep(nanoseconds: 300_000_000)
                         let pane = await commandRunner.captureTmuxPane(target: "mobile:\(window)", lines: 5)
@@ -1288,7 +1184,7 @@ struct SplitTerminalView: View {
                                 perTabInput[window] = scraped
                                 saveDrafts()
                             }
-                            _ = await httpSendKey("C-u", window: window)
+                            _ = await model.httpSendKey("C-u", window: window)
                         }
                     }
                     fastPollUntil = Date().addingTimeInterval(5)
@@ -1375,7 +1271,7 @@ struct SplitTerminalView: View {
                 Button {
                     perTabInput[activeWindowIndex] = ""
                     saveDrafts()
-                    Task { await httpSendEscape(window: activeWindowIndex) }
+                    Task { await model.httpSendEscape(window: activeWindowIndex) }
                 } label: {
                     Text("esc")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -1445,7 +1341,7 @@ struct SplitTerminalView: View {
         } else {
             let window = activeWindowIndex
             Task {
-                let ok = await httpSendText(pathsText + " ", window: window)
+                let ok = await model.httpSendText(pathsText + " ", window: window)
                 if !ok {
                     toastMessage = "Upload paths failed to send"
                 }
@@ -1491,8 +1387,8 @@ struct SplitTerminalView: View {
         }
 
         Task {
-            let textOk = await httpSendText(textToSend, window: window)
-            let enterOk = textOk ? await httpSendEnter(window: window) : false
+            let textOk = await model.httpSendText(textToSend, window: window)
+            let enterOk = textOk ? await model.httpSendEnter(window: window) : false
             isSending = false
             if !textOk || !enterOk {
                 perTabInput[activeWindowIndex] = textToSend
@@ -1556,7 +1452,7 @@ struct SplitTerminalView: View {
         // a shared backing store, so stale struct captures still read
         // current values.
         let capturedIndex = pollTarget
-        guard let content = await httpCaptureTmux(window: capturedIndex) else {
+        guard let content = await model.httpCaptureTmux(window: capturedIndex) else {
             splitLog.debug("refreshPane: capture failed for window \(capturedIndex)")
             return
         }

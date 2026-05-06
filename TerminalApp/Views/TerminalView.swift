@@ -86,10 +86,11 @@ struct TerminalView: View {
     @EnvironmentObject var server: ServerConnection
     @StateObject private var ssh = SSHTerminalService()
     @StateObject private var commandRunner = SSHCommandRunner()
+    @StateObject private var sessionModel = TerminalSessionModel()
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
-    @AppStorage("sshPassword") private var sshPassword = ""
+    @State private var sshPassword = CredentialStore.loadPassword()
     @AppStorage("useSplitView") private var useSplitView = true
 
     @State private var terminalTitle = "Terminal"
@@ -165,6 +166,7 @@ struct TerminalView: View {
                         SplitTerminalView(
                             commandRunner: commandRunner,
                             ssh: ssh,
+                            model: sessionModel,
                             activeWindowIndex: activeWindowIndex,
                             pendingApproval: activeWin?.pendingApproval ?? false,
                             pendingToolName: activeWin?.pendingToolName ?? "",
@@ -378,6 +380,7 @@ struct TerminalView: View {
             }
         }
         .onAppear {
+            sessionModel.server = server
             autoConnect()
             if ssh.isConnected && tmuxPollTimer == nil {
                 startTmuxPolling()
@@ -515,7 +518,7 @@ struct TerminalView: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let url = URL(string: "\(server.baseURL)/tmux-rename-window") else { return }
-        var request = URLRequest(url: url)
+        var request = server.authedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
@@ -531,7 +534,7 @@ struct TerminalView: View {
 
     private func createTmuxWindow() {
         guard let url = URL(string: "\(server.baseURL)/tmux-new-window") else { return }
-        var request = URLRequest(url: url)
+        var request = server.authedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Tell the server to create the window at the pane's current
@@ -571,13 +574,28 @@ struct TerminalView: View {
     }
 
     private func closeTmuxWindow(index: Int) {
-        // If this is the last window, create a new one first so tmux stays alive
         if tmuxWindows.count <= 1 {
-            createTmuxWindow()
-            // Wait for new window to exist, then kill the old one
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                killTmuxWindow(index: index)
-            }
+            guard let url = URL(string: "\(server.baseURL)/tmux-new-window") else { return }
+            var request = server.authedRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let cols = UserDefaults.standard.integer(forKey: "TerminalApp.lastPaneCols")
+            let rows = UserDefaults.standard.integer(forKey: "TerminalApp.lastPaneRows")
+            var body: [String: Any] = [:]
+            if cols >= 20 && rows >= 5 { body["cols"] = cols; body["rows"] = rows }
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            URLSession.shared.dataTask(with: request) { data, _, _ in
+                var created = false
+                if let data = data,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let idx = json["index"] as? Int, idx > 0 {
+                    created = true
+                    DispatchQueue.main.async { activeWindowIndex = idx }
+                }
+                if created {
+                    DispatchQueue.main.async { killTmuxWindow(index: index) }
+                }
+            }.resume()
         } else {
             killTmuxWindow(index: index)
         }
@@ -585,7 +603,7 @@ struct TerminalView: View {
 
     private func killTmuxWindow(index: Int) {
         guard let url = URL(string: "\(server.baseURL)/tmux-kill-window") else { return }
-        var request = URLRequest(url: url)
+        var request = server.authedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["index": index])
@@ -595,11 +613,10 @@ struct TerminalView: View {
     }
 
     private func selectTmuxWindow(index: Int) {
-        // Update local state immediately so SplitTerminalView targets the right window
         activeWindowIndex = index
 
         guard let url = URL(string: "\(server.baseURL)/tmux-select-window") else { return }
-        var request = URLRequest(url: url)
+        var request = server.authedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["index": index])
@@ -847,7 +864,12 @@ struct TerminalView: View {
 
         Task {
             var uploadedPaths: [String] = []
-            let uploadURL = URL(string: "\(server.baseURL)/upload")!
+            guard let uploadURL = URL(string: "\(server.baseURL)/upload") else {
+                isUploading = false
+                exportStatusIsError = true
+                exportStatus = "Upload failed — invalid server URL"
+                return
+            }
 
             for file in files {
                 var request = server.authedRequest(url: uploadURL)
