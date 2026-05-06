@@ -340,6 +340,7 @@ private final class SSHConnection {
                 }
             }
             .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_KEEPALIVE), value: 1)
             .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
             .connectTimeout(.seconds(15))
 
@@ -397,19 +398,28 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
-        // Send a zero-byte channel data flush every 15s. This keeps the TCP
-        // connection alive and prevents NAT/firewall idle timeouts without
-        // triggering SIGWINCH (which WindowChangeRequest would) or polluting
-        // the shell's stdin. The server reads and discards the empty write.
+        // Resend the current window size every 30s. When cols/rows match the
+        // server's last-known values, OpenSSH treats this as a no-op (no
+        // SIGWINCH delivered to the foreground process). This generates real
+        // SSH traffic (SSH_MSG_CHANNEL_REQUEST "window-change") that keeps
+        // NAT/firewall sessions alive, unlike zero-byte channel writes which
+        // violate the SSH spec. SO_KEEPALIVE on the socket is set as a
+        // secondary defence but its default interval (~2h) is too long to
+        // prevent carrier-grade NAT timeouts.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
-            initialDelay: .seconds(15),
-            delay: .seconds(15)
+            initialDelay: .seconds(30),
+            delay: .seconds(30)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
-            let buffer = sc.allocator.buffer(capacity: 0)
-            sc.writeAndFlush(SSHChannelData(type: .channel, data: .byteBuffer(buffer)), promise: nil)
+            let event = SSHChannelRequestEvent.WindowChangeRequest(
+                terminalCharacterWidth: self.lastCols,
+                terminalRowHeight: self.lastRows,
+                terminalPixelWidth: 0,
+                terminalPixelHeight: 0
+            )
+            sc.triggerUserOutboundEvent(event, promise: nil)
         }
-        sshLog.info("SSH keepalive started (15s interval)")
+        sshLog.info("SSH keepalive started (30s window-change interval)")
     }
 
     private func stopKeepalive() {
