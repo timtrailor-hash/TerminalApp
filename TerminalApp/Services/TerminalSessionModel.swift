@@ -31,6 +31,11 @@ final class TerminalSessionModel: ObservableObject {
             sessionLog.debug("[capture] skipped: server connection not attached yet")
             return nil
         }
+        // 500 lines matches the polling-loop capture window. Smaller
+        // captures save server CPU but lose context that the prompt-
+        // detection + queue-edit scrapes depend on (the box-bordered
+        // input area can sit 20+ rows above the visible bottom on a
+        // tall pane).
         guard let url = URL(string: "\(baseURL)/tmux-capture?window=\(window)&lines=500") else { return nil }
         let request = authedRequest(url: url)
         do {
@@ -40,7 +45,10 @@ final class TerminalSessionModel: ObservableObject {
                 return nil
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let content = json["content"] as? String else { return nil }
+                  let content = json["content"] as? String else {
+                sessionLog.debug("[capture] JSON decode failed for window=\(window)")
+                return nil
+            }
             return content
         } catch {
             sessionLog.error("[capture] network error: \(error.localizedDescription)")
