@@ -600,9 +600,17 @@ struct SplitTerminalView: View {
         let lower = t.lowercased()
         // "esc to interrupt" is the unambiguous active-work footer.
         if lower.contains("esc to interrupt") { return true }
-        // "Crafting…" appears mid-response; "thought for Ns" appears briefly
-        // at completion but before a new prompt.
-        if lower.contains("crafting") { return true }
+        // "Crafting…" / "Cogitating…" / "Brewing…" appear mid-response;
+        // their past-tense forms ("Cogitated for Ns", "Brewed for Ns")
+        // appear briefly at completion before a new prompt opens.
+        if lower.contains("crafting") || lower.contains("cogitating") ||
+           lower.contains("brewing") {
+            return true
+        }
+        if lower.contains("cogitated for") || lower.contains("brewed for") ||
+           lower.contains("crafted for") {
+            return true
+        }
         if lower.contains("thinking") && (lower.contains("token") || lower.contains("thought for")) {
             return true
         }
@@ -757,7 +765,11 @@ struct SplitTerminalView: View {
         result.reserveCapacity(lines.count)
         var inPrompt = false
         var gateMarkerIndices: [Int] = []
-        for (lineIdx, raw) in lines.enumerated() {
+        for (lineIdx, rawWithANSI) in lines.enumerated() {
+            // Strip ANSI CSI sequences before classification so a coloured
+            // user prompt or system marker still matches its prefix check.
+            // Display still uses the raw line; this only feeds heuristics.
+            let raw = stripANSI(rawWithANSI)
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
@@ -768,6 +780,15 @@ struct SplitTerminalView: View {
 
             if trimmed.contains("[response_gate]") {
                 gateMarkerIndices.append(lineIdx)
+            }
+
+            // Working indicators (Cogitating / Brewing / Crafting / `esc to
+            // interrupt` footer). Catches them before the prompt-continuation
+            // path treats them as user-input wraps.
+            if isWorkingIndicator(trimmed) {
+                inPrompt = false
+                result.append(.system)
+                continue
             }
 
             // Claude Code renders the user prompt as ❯ (U+276F) followed
