@@ -600,9 +600,20 @@ struct SplitTerminalView: View {
         let lower = t.lowercased()
         // "esc to interrupt" is the unambiguous active-work footer.
         if lower.contains("esc to interrupt") { return true }
-        // "Crafting…" appears mid-response; "thought for Ns" appears briefly
-        // at completion but before a new prompt.
-        if lower.contains("crafting") { return true }
+        // Working spinner frames Claude Code emits during a response.
+        // Active tense ("Crafting…" / "Brewing…") requires the keyword
+        // appear immediately before an ellipsis so user prose like
+        // "I was brewing coffee" doesn't false-positive. Past tense
+        // ("Cogitated for 3s") requires the keyword + "for" + a digit
+        // so "I cogitated for a while" also stays unflagged.
+        let activePattern = #"\b(crafting|cogitating|brewing)\s*(\.\.\.|\u{2026})"#
+        if lower.range(of: activePattern, options: .regularExpression) != nil {
+            return true
+        }
+        let pastPattern = #"\b(cogitated|brewed|crafted)\s+for\s+\d"#
+        if lower.range(of: pastPattern, options: .regularExpression) != nil {
+            return true
+        }
         if lower.contains("thinking") && (lower.contains("token") || lower.contains("thought for")) {
             return true
         }
@@ -757,7 +768,11 @@ struct SplitTerminalView: View {
         result.reserveCapacity(lines.count)
         var inPrompt = false
         var gateMarkerIndices: [Int] = []
-        for (lineIdx, raw) in lines.enumerated() {
+        for (lineIdx, rawWithANSI) in lines.enumerated() {
+            // Strip ANSI CSI sequences before classification so a coloured
+            // user prompt or system marker still matches its prefix check.
+            // Display still uses the raw line; this only feeds heuristics.
+            let raw = stripANSI(rawWithANSI)
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
@@ -768,6 +783,15 @@ struct SplitTerminalView: View {
 
             if trimmed.contains("[response_gate]") {
                 gateMarkerIndices.append(lineIdx)
+            }
+
+            // Working indicators (Cogitating / Brewing / Crafting / `esc to
+            // interrupt` footer). Catches them before the prompt-continuation
+            // path treats them as user-input wraps.
+            if isWorkingIndicator(trimmed) {
+                inPrompt = false
+                result.append(.system)
+                continue
             }
 
             // Claude Code renders the user prompt as ❯ (U+276F) followed
