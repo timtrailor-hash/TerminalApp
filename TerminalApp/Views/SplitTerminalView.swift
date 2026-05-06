@@ -600,11 +600,15 @@ struct SplitTerminalView: View {
         let lower = t.lowercased()
         // "esc to interrupt" is the unambiguous active-work footer.
         if lower.contains("esc to interrupt") { return true }
-        // "Crafting…" / "Cogitating…" / "Brewing…" appear mid-response;
-        // their past-tense forms ("Cogitated for Ns", "Brewed for Ns")
-        // appear briefly at completion before a new prompt opens.
-        if lower.contains("crafting") || lower.contains("cogitating") ||
-           lower.contains("brewing") {
+        // "Crafting…" / "Cogitating…" / "Brewing…" appear mid-response.
+        // Match keyword + ellipsis (Claude Code's TUI suffix) so user
+        // prose like "I was brewing coffee" doesn't false-positive.
+        // Past-tense ("Cogitated for Ns") is already specific enough on
+        // its own because it requires the "for" + numeric duration.
+        let endsWithEllipsis = t.hasSuffix("\u{2026}") || t.hasSuffix("...")
+        if endsWithEllipsis &&
+           (lower.contains("crafting") || lower.contains("cogitating") ||
+            lower.contains("brewing")) {
             return true
         }
         if lower.contains("cogitated for") || lower.contains("brewed for") ||
