@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("sshPassword") private var sshPassword = ""
     @AppStorage("useSplitView") private var useSplitView = true
     @State private var hostKeysCleared = false
+    @State private var showClearConfirmation = false
 
     var body: some View {
         Form {
@@ -50,8 +51,7 @@ struct SettingsView: View {
 
             Section("Security") {
                 Button(role: .destructive) {
-                    HostKeyStore.clearAll()
-                    hostKeysCleared = true
+                    showClearConfirmation = true
                 } label: {
                     HStack {
                         Text("Clear Pinned SSH Host Keys")
@@ -61,6 +61,18 @@ struct SettingsView: View {
                                 .foregroundColor(.green)
                         }
                     }
+                }
+                .confirmationDialog(
+                    "Clear all pinned SSH host keys?",
+                    isPresented: $showClearConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Clear All Keys", role: .destructive) {
+                        HostKeyStore.clearAll()
+                        hostKeysCleared = true
+                    }
+                } message: {
+                    Text("You will be prompted to trust each host again on next connection.")
                 }
             }
 
@@ -86,5 +98,6 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(AppTheme.background)
+        .onAppear { hostKeysCleared = false }
     }
 }

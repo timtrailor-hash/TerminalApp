@@ -11,7 +11,8 @@ private let sshLog = Logger(subsystem: "com.timtrailor.terminal", category: "ssh
 enum HostKeyStore {
     private static let service = "com.timtrailor.terminal.hostkeys"
 
-    static func save(host: String, key: String) {
+    @discardableResult
+    static func save(host: String, key: String) -> Bool {
         let account = host
         let data = Data(key.utf8)
         let query: [String: Any] = [
@@ -23,7 +24,12 @@ enum HostKeyStore {
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess {
+            sshLog.error("Failed to save host key for \(account): OSStatus \(status)")
+            return false
+        }
+        return true
     }
 
     static func load(host: String) -> String? {
@@ -36,8 +42,17 @@ enum HostKeyStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if status == errSecSuccess, let data = result as? Data {
+            return String(data: data, encoding: .utf8)
+        }
+        let udKey = "SSHHostKey.\(host)"
+        if let legacy = UserDefaults.standard.string(forKey: udKey) {
+            sshLog.info("Migrating host key for \(host) from UserDefaults to Keychain")
+            save(host: host, key: legacy)
+            UserDefaults.standard.removeObject(forKey: udKey)
+            return legacy
+        }
+        return nil
     }
 
     static func clear(host: String) {
@@ -72,35 +87,38 @@ final class TOFUHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
         let hostName = self.host
         let keyString = String(openSSHPublicKey: hostKey)
+        let eventLoop = validationCompletePromise.futureResult.eventLoop
 
-        DispatchQueue.main.async {
+        DispatchQueue.global(qos: .userInitiated).async {
             if let saved = HostKeyStore.load(host: hostName) {
                 if saved == keyString {
-                    validationCompletePromise.succeed(())
+                    eventLoop.execute { validationCompletePromise.succeed(()) }
                 } else {
-                    sshLog.error("Host key mismatch for \(hostName). Saved key differs from presented key.")
-                    validationCompletePromise.fail(SSHHostKeyError.mismatch(host: hostName))
+                    sshLog.error("Host key mismatch for \(hostName) — possible MITM. Saved key differs from presented key.")
+                    eventLoop.execute { validationCompletePromise.fail(SSHHostKeyError.mismatch(host: hostName)) }
                 }
             } else {
                 sshLog.info("First connection to \(hostName) — pinning host key")
-                HostKeyStore.save(host: hostName, key: keyString)
-                validationCompletePromise.succeed(())
+                if HostKeyStore.save(host: hostName, key: keyString) {
+                    eventLoop.execute { validationCompletePromise.succeed(()) }
+                } else {
+                    eventLoop.execute { validationCompletePromise.fail(SSHHostKeyError.keychainWriteFailed(host: hostName)) }
+                }
             }
         }
-    }
-
-    static func clearPinnedKey(for host: String) {
-        HostKeyStore.clear(host: host)
     }
 }
 
 enum SSHHostKeyError: Error, LocalizedError {
     case mismatch(host: String)
+    case keychainWriteFailed(host: String)
 
     var errorDescription: String? {
         switch self {
         case .mismatch(let host):
-            return "Host key for \(host) changed. Clear the pinned key in Settings to reconnect after a server rebuild."
+            return "Host key for \(host) changed. This may indicate a man-in-the-middle attack or a server rebuild. Verify the change, then clear the pinned key in Settings to reconnect."
+        case .keychainWriteFailed(let host):
+            return "Failed to save host key for \(host) to Keychain."
         }
     }
 }
