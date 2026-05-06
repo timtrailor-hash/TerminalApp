@@ -1157,13 +1157,22 @@ struct SplitTerminalView: View {
                     _ = await model.httpSendKey("Up", window: window)
                     if recalled != nil {
                         _ = await model.httpSendKey("C-u", window: window)
-                    } else if commandRunner.isConnected {
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        let pane = await commandRunner.captureTmuxPane(target: "mobile:\(window)", lines: 5)
-                        let lastLine = pane.components(separatedBy: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
-                        let scraped = lastLine
-                            .replacingOccurrences(of: "^[>$#%]\\s*", with: "", options: .regularExpression)
-                            .trimmingCharacters(in: .whitespaces)
+                    } else {
+                        // Stack empty (post-restart, or messages sent before
+                        // this build). Up has populated Claude Code's
+                        // box-bordered prompt area in tmux; scrape it back
+                        // into iOS so the user can edit. Capture twice in
+                        // case the first poll lands before tmux re-renders.
+                        var scraped = ""
+                        for delayMs in [250, 400] {
+                            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                            if let pane = await captureRecentPane(window: window) {
+                                if let text = extractRecalledPrompt(from: pane), !text.isEmpty {
+                                    scraped = text
+                                    break
+                                }
+                            }
+                        }
                         if !scraped.isEmpty {
                             await MainActor.run {
                                 perTabInput[window] = scraped
@@ -1195,6 +1204,78 @@ struct SplitTerminalView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+    }
+
+    /// Pull the tail of the tmux pane via the conversation server's
+    /// HTTP capture endpoint. The HTTP path is the same one the polling
+    /// loop already uses, so it works regardless of SSH state and
+    /// without the OS-default 75s TCP timeout cliff that an SSH-first
+    /// design has on a stale-but-`isConnected` socket.
+    private func captureRecentPane(window: Int) async -> String? {
+        await model.httpCaptureTmux(window: window)
+    }
+
+    /// Strip ANSI CSI escape sequences (colours, cursor moves) from a
+    /// pane line so prefix/suffix checks against the box-drawing
+    /// characters work even when Claude Code emits coloured borders.
+    /// Pattern: ESC `[` … final-byte where the final byte is in the
+    /// 0x40-0x7E range. We deliberately do not handle every CSI variant
+    /// — just the SGR / cursor cases tmux capture-pane is likely to
+    /// produce.
+    private static let ansiCSIRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[\\x40-\\x7E]")
+    }()
+
+    private func stripANSI(_ raw: String) -> String {
+        guard let regex = Self.ansiCSIRegex else { return raw }
+        let range = NSRange(raw.startIndex..., in: raw)
+        return regex.stringByReplacingMatches(in: raw, range: range, withTemplate: "")
+    }
+
+    /// Find the recalled-prompt text inside Claude Code's box-bordered
+    /// input area. The TUI renders queued messages as
+    ///   ╭───────────────────╮
+    ///   │ > some queued msg │
+    ///   ╰───────────────────╯
+    /// after Up is pressed. Walk the pane bottom-up; require a `│ > … │`
+    /// line that has a `╰` border within 3 lines below it (anchors the
+    /// match to a real prompt frame, not arbitrary tool-output rows
+    /// that happen to start with `>`). Returns nil if no anchored prompt
+    /// is present.
+    private func extractRecalledPrompt(from pane: String) -> String? {
+        let lines = pane.components(separatedBy: "\n").map(stripANSI)
+        for idx in (0..<lines.count).reversed() {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("│"), trimmed.hasSuffix("│") else { continue }
+            var inner = String(trimmed.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespaces)
+            if inner.hasPrefix("> ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix(">") {
+                inner = String(inner.dropFirst())
+            } else if inner.hasPrefix("❯ ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix("❯") {
+                inner = String(inner.dropFirst())
+            } else {
+                continue
+            }
+            // Anchor: a real prompt frame has `╰` within the next few
+            // lines. Without this, any `│ > foo │`-shaped row in tool
+            // output would match.
+            let lookahead = min(idx + 4, lines.count)
+            var anchored = false
+            if idx + 1 < lookahead {
+                for j in (idx + 1)..<lookahead {
+                    let t = lines[j].trimmingCharacters(in: .whitespaces)
+                    if t.hasPrefix("╰") { anchored = true; break }
+                }
+            }
+            guard anchored else { continue }
+            let text = inner.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { return text }
+        }
+        return nil
     }
 
     // MARK: - Prompt Option Buttons
