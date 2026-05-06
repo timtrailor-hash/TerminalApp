@@ -112,7 +112,7 @@ struct MoshServerLauncher {
             var collectedOutput = Data()
             let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
-            let serverAuthDelegate = AcceptAllHostKeysDelegate()
+            let serverAuthDelegate = TOFUHostKeysDelegate(host: host)
             let userAuthDelegate = SimplePasswordDelegate(username: username, password: password)
 
             let bootstrap = ClientBootstrap(group: group)
@@ -230,12 +230,5 @@ struct MoshServerLauncher {
             return nil
         }
         return MoshServerInfo(port: port, key: String(output[keyRange]))
-    }
-}
-
-// Reuse from SSHTerminalService — accept all host keys on trusted LAN
-private final class AcceptAllHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate {
-    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        validationCompletePromise.succeed(())
     }
 }
