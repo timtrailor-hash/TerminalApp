@@ -818,11 +818,16 @@ struct TerminalView: View {
                     continue
                 }
                 let thumb = uiImage.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? uiImage
-                // jpegData can return nil for unsupported colour spaces (CMYK,
-                // some HEIF variants); fall back to the original bytes only
-                // when those are themselves a non-empty image payload.
-                let encoded = uiImage.jpegData(compressionQuality: 0.8)
-                let jpegData = (encoded?.isEmpty == false) ? encoded! : data
+                // jpegData can return nil for some images; fall back to the
+                // original picker bytes only when those are themselves a
+                // non-empty image payload. The post-fallback isEmpty guard
+                // below is the actual zero-byte gate.
+                let jpegData: Data
+                if let encoded = uiImage.jpegData(compressionQuality: 0.8), !encoded.isEmpty {
+                    jpegData = encoded
+                } else {
+                    jpegData = data
+                }
                 guard !jpegData.isEmpty else {
                     failures.append("\(label): empty payload after encode")
                     continue
@@ -863,8 +868,12 @@ struct TerminalView: View {
         }
         if let image = UIImage(data: data) {
             let thumb = image.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? image
-            let encoded = image.jpegData(compressionQuality: 0.8)
-            let jpegData = (encoded?.isEmpty == false) ? encoded! : data
+            let jpegData: Data
+            if let encoded = image.jpegData(compressionQuality: 0.8), !encoded.isEmpty {
+                jpegData = encoded
+            } else {
+                jpegData = data
+            }
             guard !jpegData.isEmpty else {
                 exportStatusIsError = true
                 exportStatus = "File \(filename): empty payload after encode"
