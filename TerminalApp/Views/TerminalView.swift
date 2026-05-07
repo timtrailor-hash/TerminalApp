@@ -801,31 +801,42 @@ struct TerminalView: View {
     // MARK: - File Upload
 
     private func loadSelectedPhotos(_ items: [PhotosPickerItem]) async {
-        var failCount = 0
-        for item in items {
+        var failures: [String] = []
+        for (idx, item) in items.enumerated() {
+            let label = "photo \(idx + 1)"
             do {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
-                    failCount += 1
+                guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+                    failures.append("\(label): could not be read")
                     continue
                 }
                 guard let uiImage = UIImage(data: data) else {
-                    failCount += 1
+                    failures.append("\(label): not a valid image")
                     continue
                 }
                 let thumb = uiImage.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? uiImage
-                let jpegData = uiImage.jpegData(compressionQuality: 0.8) ?? data
+                // jpegData can return nil for unsupported colour spaces (CMYK,
+                // some HEIF variants); fall back to the original bytes only
+                // when those are themselves a non-empty image payload.
+                let encoded = uiImage.jpegData(compressionQuality: 0.8)
+                let jpegData = (encoded?.isEmpty == false) ? encoded! : data
+                guard !jpegData.isEmpty else {
+                    failures.append("\(label): empty payload after encode")
+                    continue
+                }
                 await MainActor.run {
                     pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData))
                 }
             } catch {
-                failCount += 1
+                failures.append("\(label): \(error.localizedDescription)")
             }
         }
         await MainActor.run {
             selectedPhotos = []
-            if failCount > 0 {
+            if !failures.isEmpty {
                 exportStatusIsError = true
-                exportStatus = "\(failCount) photo(s) failed to load"
+                let head = failures.prefix(3).joined(separator: "; ")
+                let extra = failures.count > 3 ? " (+\(failures.count - 3) more)" : ""
+                exportStatus = "Photo load failed: \(head)\(extra)"
             }
         }
     }
@@ -841,9 +852,15 @@ struct TerminalView: View {
     }
 
     private func addFileData(_ data: Data, filename: String) {
+        guard !data.isEmpty else {
+            exportStatusIsError = true
+            exportStatus = "File \(filename) is empty, skipped"
+            return
+        }
         if let image = UIImage(data: data) {
             let thumb = image.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? image
-            let jpegData = image.jpegData(compressionQuality: 0.8) ?? data
+            let encoded = image.jpegData(compressionQuality: 0.8)
+            let jpegData = (encoded?.isEmpty == false) ? encoded! : data
             pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData, filename: filename))
         } else {
             let placeholder = UIImage(systemName: "doc.fill") ?? UIImage()
@@ -882,7 +899,12 @@ struct TerminalView: View {
                 return
             }
 
+            var skippedEmpty = 0
             for file in files {
+                guard !file.data.isEmpty else {
+                    skippedEmpty += 1
+                    continue
+                }
                 var request = server.authedRequest(url: uploadURL)
                 request.httpMethod = "POST"
 
@@ -949,7 +971,11 @@ struct TerminalView: View {
 
                     exportStatusIsError = false
                     let fileWord = uploadedPaths.count == 1 ? "file" : "files"
-                    exportStatus = "\(uploadedPaths.count) \(fileWord) uploaded"
+                    let suffix = skippedEmpty > 0 ? " (\(skippedEmpty) empty skipped)" : ""
+                    exportStatus = "\(uploadedPaths.count) \(fileWord) uploaded\(suffix)"
+                } else if skippedEmpty > 0 {
+                    exportStatusIsError = true
+                    exportStatus = "All \(skippedEmpty) file(s) were empty, nothing uploaded"
                 } else {
                     exportStatusIsError = true
                     exportStatus = "Upload failed"
