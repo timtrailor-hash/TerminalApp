@@ -785,8 +785,6 @@ struct SplitTerminalView: View {
                 gateMarkerIndices.append(lineIdx)
             }
 
-<<<<<<< HEAD
-=======
             // Working indicators (Cogitating / Brewing / Crafting / `esc to
             // interrupt` footer). Catches them before the prompt-continuation
             // path treats them as user-input wraps.
@@ -796,7 +794,6 @@ struct SplitTerminalView: View {
                 continue
             }
 
->>>>>>> origin/main
             // Claude Code renders the user prompt as ❯ (U+276F) followed
             // by U+00A0 or a space. Do NOT match "> " or "$ " — those are
             // ambiguous (markdown blockquotes, shell output) and cause Claude
