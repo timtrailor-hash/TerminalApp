@@ -243,6 +243,37 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             }
         }()
 
+        // Hook-ASK pushes (kind="hook_ask") share the PROPOSAL_ACTIONS
+        // category so the lock-screen surfaces Accept / Reject / Discuss,
+        // but route to /internal/hook-ask-action/<window>/<prompt_id>/<action>
+        // because they have a window+promptId pair instead of an alert_id.
+        // Discuss falls through to the deep-link branch below so the app
+        // foregrounds onto the right tab without sending a key.
+        if let action = proposalAction,
+           let kind = info["kind"] as? String, kind == "hook_ask",
+           action != "discuss",
+           let window = AppDelegate.windowIndex(from: info),
+           let promptId = info["prompt_id"] as? Int ?? Int((info["prompt_id"] as? String) ?? ""),
+           let server = self.server,
+           let url = URL(string: "\(server.baseURL)/internal/hook-ask-action/\(window)/\(promptId)/\(action)") {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !server.authToken.isEmpty {
+                req.setValue("Bearer \(server.authToken)", forHTTPHeaderField: "Authorization")
+            }
+            req.httpBody = try? JSONSerialization.data(
+                withJSONObject: ["source": "push-action"]
+            )
+            URLSession.shared.dataTask(with: req) { _, _, error in
+                if let error = error {
+                    print("Hook-ask action POST failed: \(error)")
+                }
+                DispatchQueue.main.async { completionHandler() }
+            }.resume()
+            return
+        }
+
         if let action = proposalAction,
            let alertId = info["alert_id"] as? String,
            let server = self.server,
