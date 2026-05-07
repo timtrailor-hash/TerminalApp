@@ -87,6 +87,10 @@ struct TerminalView: View {
     @StateObject private var ssh = SSHTerminalService()
     @StateObject private var commandRunner = SSHCommandRunner()
     @StateObject private var sessionModel = TerminalSessionModel()
+    @StateObject private var autonomousMonitor = AutonomousMonitor(serverProvider: {
+        let s = ServerConnection()
+        return (s.baseURL, s.authToken)
+    })
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("sshUsername") private var sshUsername = "timtrailor"
@@ -144,6 +148,8 @@ struct TerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            AutonomousBanner(monitor: autonomousMonitor)
+
             // Tmux window tab bar
             if ssh.isConnected && !tmuxWindows.isEmpty {
                 HStack(spacing: 4) {
@@ -385,10 +391,14 @@ struct TerminalView: View {
             if ssh.isConnected && tmuxPollTimer == nil {
                 startTmuxPolling()
             }
+            autonomousMonitor.start()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 autoConnect()
+                autonomousMonitor.start()
+            } else if newPhase == .background {
+                autonomousMonitor.stop()
             }
         }
         .onChange(of: ssh.isConnected) { _, connected in
@@ -400,6 +410,7 @@ struct TerminalView: View {
         }
         .onDisappear {
             stopTmuxPolling()
+            autonomousMonitor.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: .deepLinkToWindow)) { note in
             guard let window = note.userInfo?["window"] as? Int else { return }

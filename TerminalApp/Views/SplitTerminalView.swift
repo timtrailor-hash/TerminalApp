@@ -449,28 +449,6 @@ struct SplitTerminalView: View {
 
     // MARK: - Output Section
 
-    /// Build a single AttributedString containing every line in the pane,
-    /// each carrying its classifier colour as a foreground attribute on its
-    /// substring run. Rendering this as one `Text(...)` (instead of one
-    /// Text per line in a LazyVStack) is what unlocks cross-line selection
-    /// on iOS — SwiftUI only permits selection within one Text view, so we
-    /// collapse all the lines into that single view while preserving the
-    /// per-run colours via AttributedString.
-    private func buildPaneAttributedText(_ lines: [PaneLine]) -> AttributedString {
-        var result = AttributedString("")
-        for (idx, line) in lines.enumerated() {
-            // Empty lines still need a substring so the newline renders.
-            let raw = line.text.isEmpty ? " " : line.text
-            var run = AttributedString(raw)
-            run.foregroundColor = colorFor(line.lineType)
-            result.append(run)
-            if idx < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
-    }
-
     /// Detect an ACTIVE Claude Code permission prompt in the current pane.
     /// Must satisfy all of:
     ///   1. Options appear in the last 25 lines (not older scrollback).
@@ -622,9 +600,20 @@ struct SplitTerminalView: View {
         let lower = t.lowercased()
         // "esc to interrupt" is the unambiguous active-work footer.
         if lower.contains("esc to interrupt") { return true }
-        // "Crafting…" appears mid-response; "thought for Ns" appears briefly
-        // at completion but before a new prompt.
-        if lower.contains("crafting") { return true }
+        // Working spinner frames Claude Code emits during a response.
+        // Active tense ("Crafting…" / "Brewing…") requires the keyword
+        // appear immediately before an ellipsis so user prose like
+        // "I was brewing coffee" doesn't false-positive. Past tense
+        // ("Cogitated for 3s") requires the keyword + "for" + a digit
+        // so "I cogitated for a while" also stays unflagged.
+        let activePattern = #"\b(crafting|cogitating|brewing)\s*(\.\.\.|\u{2026})"#
+        if lower.range(of: activePattern, options: .regularExpression) != nil {
+            return true
+        }
+        let pastPattern = #"\b(cogitated|brewed|crafted)\s+for\s+\d"#
+        if lower.range(of: pastPattern, options: .regularExpression) != nil {
+            return true
+        }
         if lower.contains("thinking") && (lower.contains("token") || lower.contains("thought for")) {
             return true
         }
@@ -769,19 +758,6 @@ struct SplitTerminalView: View {
 
     // MARK: - Color coding
 
-    private func colorFor(_ type: LineType) -> Color {
-        switch type {
-        case .userInput:
-            return Color(red: 0.4, green: 0.8, blue: 1.0) // bright cyan
-        case .claudeText:
-            return Color(red: 0.88, green: 0.88, blue: 0.88) // light grey (default)
-        case .system:
-            return Color(red: 0.6, green: 0.6, blue: 0.6) // dim grey
-        case .superseded:
-            return Color(red: 0.5, green: 0.5, blue: 0.5).opacity(0.5) // dimmed
-        }
-    }
-
     /// Classify a full pane in one pass so prompt-continuation lines inherit the
     /// userInput colour. Per-line classification breaks colouring when Claude
     /// Code wraps a prompt across multiple visual rows — only the first row
@@ -792,7 +768,15 @@ struct SplitTerminalView: View {
         result.reserveCapacity(lines.count)
         var inPrompt = false
         var gateMarkerIndices: [Int] = []
+<<<<<<< HEAD
         for (lineIdx, raw) in lines.enumerated() {
+=======
+        for (lineIdx, rawWithANSI) in lines.enumerated() {
+            // Strip ANSI CSI sequences before classification so a coloured
+            // user prompt or system marker still matches its prefix check.
+            // Display still uses the raw line; this only feeds heuristics.
+            let raw = stripANSI(rawWithANSI)
+>>>>>>> origin/main
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
@@ -805,6 +789,18 @@ struct SplitTerminalView: View {
                 gateMarkerIndices.append(lineIdx)
             }
 
+<<<<<<< HEAD
+=======
+            // Working indicators (Cogitating / Brewing / Crafting / `esc to
+            // interrupt` footer). Catches them before the prompt-continuation
+            // path treats them as user-input wraps.
+            if isWorkingIndicator(trimmed) {
+                inPrompt = false
+                result.append(.system)
+                continue
+            }
+
+>>>>>>> origin/main
             // Claude Code renders the user prompt as ❯ (U+276F) followed
             // by U+00A0 or a space. Do NOT match "> " or "$ " — those are
             // ambiguous (markdown blockquotes, shell output) and cause Claude
@@ -1192,13 +1188,22 @@ struct SplitTerminalView: View {
                     _ = await model.httpSendKey("Up", window: window)
                     if recalled != nil {
                         _ = await model.httpSendKey("C-u", window: window)
-                    } else if commandRunner.isConnected {
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        let pane = await commandRunner.captureTmuxPane(target: "mobile:\(window)", lines: 5)
-                        let lastLine = pane.components(separatedBy: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
-                        let scraped = lastLine
-                            .replacingOccurrences(of: "^[>$#%]\\s*", with: "", options: .regularExpression)
-                            .trimmingCharacters(in: .whitespaces)
+                    } else {
+                        // Stack empty (post-restart, or messages sent before
+                        // this build). Up has populated Claude Code's
+                        // box-bordered prompt area in tmux; scrape it back
+                        // into iOS so the user can edit. Capture twice in
+                        // case the first poll lands before tmux re-renders.
+                        var scraped = ""
+                        for delayMs in [250, 400] {
+                            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                            if let pane = await captureRecentPane(window: window) {
+                                if let text = extractRecalledPrompt(from: pane), !text.isEmpty {
+                                    scraped = text
+                                    break
+                                }
+                            }
+                        }
                         if !scraped.isEmpty {
                             await MainActor.run {
                                 perTabInput[window] = scraped
@@ -1230,6 +1235,78 @@ struct SplitTerminalView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+    }
+
+    /// Pull the tail of the tmux pane via the conversation server's
+    /// HTTP capture endpoint. The HTTP path is the same one the polling
+    /// loop already uses, so it works regardless of SSH state and
+    /// without the OS-default 75s TCP timeout cliff that an SSH-first
+    /// design has on a stale-but-`isConnected` socket.
+    private func captureRecentPane(window: Int) async -> String? {
+        await model.httpCaptureTmux(window: window)
+    }
+
+    /// Strip ANSI CSI escape sequences (colours, cursor moves) from a
+    /// pane line so prefix/suffix checks against the box-drawing
+    /// characters work even when Claude Code emits coloured borders.
+    /// Pattern: ESC `[` … final-byte where the final byte is in the
+    /// 0x40-0x7E range. We deliberately do not handle every CSI variant
+    /// — just the SGR / cursor cases tmux capture-pane is likely to
+    /// produce.
+    private static let ansiCSIRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[\\x40-\\x7E]")
+    }()
+
+    private func stripANSI(_ raw: String) -> String {
+        guard let regex = Self.ansiCSIRegex else { return raw }
+        let range = NSRange(raw.startIndex..., in: raw)
+        return regex.stringByReplacingMatches(in: raw, range: range, withTemplate: "")
+    }
+
+    /// Find the recalled-prompt text inside Claude Code's box-bordered
+    /// input area. The TUI renders queued messages as
+    ///   ╭───────────────────╮
+    ///   │ > some queued msg │
+    ///   ╰───────────────────╯
+    /// after Up is pressed. Walk the pane bottom-up; require a `│ > … │`
+    /// line that has a `╰` border within 3 lines below it (anchors the
+    /// match to a real prompt frame, not arbitrary tool-output rows
+    /// that happen to start with `>`). Returns nil if no anchored prompt
+    /// is present.
+    private func extractRecalledPrompt(from pane: String) -> String? {
+        let lines = pane.components(separatedBy: "\n").map(stripANSI)
+        for idx in (0..<lines.count).reversed() {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("│"), trimmed.hasSuffix("│") else { continue }
+            var inner = String(trimmed.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespaces)
+            if inner.hasPrefix("> ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix(">") {
+                inner = String(inner.dropFirst())
+            } else if inner.hasPrefix("❯ ") {
+                inner = String(inner.dropFirst(2))
+            } else if inner.hasPrefix("❯") {
+                inner = String(inner.dropFirst())
+            } else {
+                continue
+            }
+            // Anchor: a real prompt frame has `╰` within the next few
+            // lines. Without this, any `│ > foo │`-shaped row in tool
+            // output would match.
+            let lookahead = min(idx + 4, lines.count)
+            var anchored = false
+            if idx + 1 < lookahead {
+                for j in (idx + 1)..<lookahead {
+                    let t = lines[j].trimmingCharacters(in: .whitespaces)
+                    if t.hasPrefix("╰") { anchored = true; break }
+                }
+            }
+            guard anchored else { continue }
+            let text = inner.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { return text }
+        }
+        return nil
     }
 
     // MARK: - Prompt Option Buttons
@@ -1355,18 +1432,18 @@ struct SplitTerminalView: View {
         let pathsText = consumed.joined(separator: " ")
         let currentInput = perTabInput[activeWindowIndex] ?? ""
         let prose = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Tim 2026-05-06: do NOT auto-submit on upload. Append the uploaded
+        // paths into the input buffer so the user can edit, add more prose,
+        // or delete the whole thing before tapping Send. The previous behaviour
+        // (auto-submit) shipped a file to Claude before the user was ready and
+        // gave no way to abort the send.
         if !prose.isEmpty {
             perTabInput[activeWindowIndex] = pathsText + " " + prose
-            sendInput()
         } else {
-            let window = activeWindowIndex
-            Task {
-                let ok = await model.httpSendText(pathsText + " ", window: window)
-                if !ok {
-                    toastMessage = "Upload paths failed to send"
-                }
-            }
+            perTabInput[activeWindowIndex] = pathsText + " "
         }
+        saveDrafts()
+        inputFocused = true
     }
 
     private func sendInput() {
