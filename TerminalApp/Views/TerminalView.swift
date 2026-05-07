@@ -805,8 +805,12 @@ struct TerminalView: View {
         for (idx, item) in items.enumerated() {
             let label = "photo \(idx + 1)"
             do {
-                guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
                     failures.append("\(label): could not be read")
+                    continue
+                }
+                guard !data.isEmpty else {
+                    failures.append("\(label): empty data from photo picker")
                     continue
                 }
                 guard let uiImage = UIImage(data: data) else {
@@ -861,6 +865,11 @@ struct TerminalView: View {
             let thumb = image.preparingThumbnail(of: CGSize(width: 120, height: 120)) ?? image
             let encoded = image.jpegData(compressionQuality: 0.8)
             let jpegData = (encoded?.isEmpty == false) ? encoded! : data
+            guard !jpegData.isEmpty else {
+                exportStatusIsError = true
+                exportStatus = "File \(filename): empty payload after encode"
+                return
+            }
             pendingFiles.append(PendingFile(thumbnail: thumb, data: jpegData, filename: filename))
         } else {
             let placeholder = UIImage(systemName: "doc.fill") ?? UIImage()
