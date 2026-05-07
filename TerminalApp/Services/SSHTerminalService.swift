@@ -533,7 +533,11 @@ private final class SSHConnection {
     private func shutdownGroup() {
         if let group {
             self.group = nil
-            group.shutdownGracefully { _ in }
+            group.shutdownGracefully { error in
+                if let error {
+                    sshLog.error("NIO event loop group shutdown error: \(error.localizedDescription)")
+                }
+            }
         }
     }
 }

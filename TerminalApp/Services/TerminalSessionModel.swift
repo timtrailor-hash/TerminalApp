@@ -113,6 +113,7 @@ final class TerminalSessionModel: ObservableObject {
             }
             return true
         } catch {
+            sessionLog.error("[send-key] network error: \(error.localizedDescription)")
             return false
         }
     }
@@ -127,6 +128,13 @@ final class TerminalSessionModel: ObservableObject {
             "rows": rows,
             "session": "mobile",
         ])
-        _ = try? await URLSession.shared.data(for: request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                sessionLog.error("[resize] HTTP \(http.statusCode) for \(cols)x\(rows)")
+            }
+        } catch {
+            sessionLog.error("[resize] network error: \(error.localizedDescription)")
+        }
     }
 }

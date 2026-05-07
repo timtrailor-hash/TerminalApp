@@ -381,9 +381,13 @@ struct TerminalView: View {
             .ignoresSafeArea()
         }
         .sheet(isPresented: $showFilePicker) {
-            FileImagePicker { data, filename in
-                addFileData(data, filename: filename)
-            }
+            FileImagePicker(
+                onPick: { data, filename in addFileData(data, filename: filename) },
+                onError: { message in
+                    exportStatusIsError = true
+                    exportStatus = message
+                }
+            )
         }
         .onAppear {
             sessionModel.server = server
@@ -639,7 +643,8 @@ struct TerminalView: View {
     private func pollTmuxWindows() {
         guard ssh.isConnected else { return }
         guard let url = URL(string: "\(server.baseURL)/tmux-windows") else { return }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
+        let request = server.authedRequest(url: url)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
             guard let data = data else { return }
 
             let applyWindows: ([TmuxWindow]) -> Void = { windows in
@@ -1256,6 +1261,7 @@ struct CameraPicker: UIViewControllerRepresentable {
 
 struct FileImagePicker: UIViewControllerRepresentable {
     let onPick: (Data, String) -> Void
+    let onError: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
@@ -1278,10 +1284,17 @@ struct FileImagePicker: UIViewControllerRepresentable {
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
+                let name = url.lastPathComponent
+                guard url.startAccessingSecurityScopedResource() else {
+                    parent.onError("File \(name): could not be accessed (sandbox denied)")
+                    continue
+                }
                 defer { url.stopAccessingSecurityScopedResource() }
-                if let data = try? Data(contentsOf: url) {
-                    parent.onPick(data, url.lastPathComponent)
+                do {
+                    let data = try Data(contentsOf: url)
+                    parent.onPick(data, name)
+                } catch {
+                    parent.onError("File \(name): could not be read (\(error.localizedDescription))")
                 }
             }
         }

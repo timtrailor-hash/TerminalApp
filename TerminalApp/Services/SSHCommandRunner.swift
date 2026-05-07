@@ -65,7 +65,7 @@ final class SSHCommandRunner: ObservableObject {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 guard let self else { return }
                 guard let cont = self.pendingContinuation else { return }
-                cmdLog.warning("Command timed out after 10s: \(command.prefix(80))")
+                cmdLog.error("Command timed out after 10s, returning empty: \(command.prefix(80))")
                 self.pendingContinuation = nil
                 self.outputBuffer = ""
                 cont.resume(returning: "")
