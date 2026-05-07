@@ -1032,8 +1032,8 @@ struct SplitTerminalView: View {
 
     private func riskColor(_ risk: String) -> Color {
         switch risk {
-        case "read": return .green
-        case "write_local": return .yellow
+        case "read", "read-only": return .green
+        case "write_local", "write-local": return .yellow
         case "external": return .orange
         case "destructive": return .red
         case "neutral": return .gray
@@ -1043,8 +1043,8 @@ struct SplitTerminalView: View {
 
     private func riskLabel(_ risk: String) -> String {
         switch risk {
-        case "read": return "READ ONLY"
-        case "write_local": return "LOCAL WRITE"
+        case "read", "read-only": return "READ ONLY"
+        case "write_local", "write-local": return "LOCAL WRITE"
         case "external": return "EXTERNAL"
         case "destructive": return "DESTRUCTIVE"
         case "neutral": return "NEUTRAL"
