@@ -768,11 +768,15 @@ struct SplitTerminalView: View {
         result.reserveCapacity(lines.count)
         var inPrompt = false
         var gateMarkerIndices: [Int] = []
+<<<<<<< HEAD
+        for (lineIdx, raw) in lines.enumerated() {
+=======
         for (lineIdx, rawWithANSI) in lines.enumerated() {
             // Strip ANSI CSI sequences before classification so a coloured
             // user prompt or system marker still matches its prefix check.
             // Display still uses the raw line; this only feeds heuristics.
             let raw = stripANSI(rawWithANSI)
+>>>>>>> origin/main
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
@@ -785,6 +789,8 @@ struct SplitTerminalView: View {
                 gateMarkerIndices.append(lineIdx)
             }
 
+<<<<<<< HEAD
+=======
             // Working indicators (Cogitating / Brewing / Crafting / `esc to
             // interrupt` footer). Catches them before the prompt-continuation
             // path treats them as user-input wraps.
@@ -794,6 +800,7 @@ struct SplitTerminalView: View {
                 continue
             }
 
+>>>>>>> origin/main
             // Claude Code renders the user prompt as ❯ (U+276F) followed
             // by U+00A0 or a space. Do NOT match "> " or "$ " — those are
             // ambiguous (markdown blockquotes, shell output) and cause Claude
