@@ -768,15 +768,11 @@ struct SplitTerminalView: View {
         result.reserveCapacity(lines.count)
         var inPrompt = false
         var gateMarkerIndices: [Int] = []
-<<<<<<< HEAD
-        for (lineIdx, raw) in lines.enumerated() {
-=======
         for (lineIdx, rawWithANSI) in lines.enumerated() {
             // Strip ANSI CSI sequences before classification so a coloured
             // user prompt or system marker still matches its prefix check.
             // Display still uses the raw line; this only feeds heuristics.
             let raw = stripANSI(rawWithANSI)
->>>>>>> origin/main
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("SUPERSEDED") {
