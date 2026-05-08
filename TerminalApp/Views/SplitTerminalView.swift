@@ -1279,14 +1279,24 @@ struct SplitTerminalView: View {
                         // into iOS so the user can edit. Capture twice in
                         // case the first poll lands before tmux re-renders.
                         var scraped = ""
+                        var lastPane: String? = nil
                         for delayMs in [250, 400] {
                             try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                             if let pane = await captureRecentPane(window: window) {
+                                lastPane = pane
                                 if let text = extractRecalledPrompt(from: pane), !text.isEmpty {
                                     scraped = text
                                     break
                                 }
                             }
+                        }
+                        // Fallback: if the queue was empty, Up does not
+                        // populate the box prompt. Pull the most recent
+                        // inline `> message` user line from the pane
+                        // scrollback so the input field is not blank.
+                        if scraped.isEmpty, let pane = lastPane,
+                           let text = extractLastInlineUserMessage(from: pane), !text.isEmpty {
+                            scraped = text
                         }
                         if !scraped.isEmpty {
                             await MainActor.run {
@@ -1387,6 +1397,35 @@ struct SplitTerminalView: View {
                 }
             }
             guard anchored else { continue }
+            let text = inner.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { return text }
+        }
+        return nil
+    }
+
+    /// Fallback when the queue is empty (Up populated nothing). Walk the
+    /// pane bottom-up looking for the most recent inline `> message`
+    /// user line in scrollback. Skips box-bordered rows (those are the
+    /// `extractRecalledPrompt` domain) and `> [N]` tool references.
+    private func extractLastInlineUserMessage(from pane: String) -> String? {
+        let lines = pane.components(separatedBy: "\n").map(stripANSI)
+        for idx in (0..<lines.count).reversed() {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("│") || trimmed.hasSuffix("│") { continue }
+            if trimmed.hasPrefix("╭") || trimmed.hasPrefix("╰") || trimmed.hasPrefix("─") { continue }
+            let inner: String
+            if trimmed.hasPrefix("> ") {
+                inner = String(trimmed.dropFirst(2))
+            } else if trimmed.hasPrefix("❯ ") {
+                inner = String(trimmed.dropFirst(2))
+            } else {
+                continue
+            }
+            // Filter `> [N] ...` tool references that Claude Code prints
+            // inline. Real user messages do not start with a bracketed
+            // index.
+            if inner.hasPrefix("[") { continue }
             let text = inner.trimmingCharacters(in: .whitespaces)
             if !text.isEmpty { return text }
         }
