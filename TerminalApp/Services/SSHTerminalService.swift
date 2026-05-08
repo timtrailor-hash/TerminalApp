@@ -299,8 +299,21 @@ private final class ShellChannelHandler: ChannelInboundHandler {
 
 // MARK: - SSH Connection (NIO event loop managed)
 
-private enum SSHConnectionError: Error {
+private enum SSHConnectionError: Error, LocalizedError {
     case invalidChannelType
+    case keepaliveWriteFailed(underlying: Error)
+    case idleReadTimeout(seconds: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidChannelType:
+            return "SSH channel is not a session"
+        case .keepaliveWriteFailed(let underlying):
+            return "SSH keepalive write failed: \(underlying.localizedDescription)"
+        case .idleReadTimeout(let seconds):
+            return "SSH connection idle: no data received in \(seconds)s"
+        }
+    }
 }
 
 /// Manages the NIO SSH connection lifecycle.
@@ -350,6 +363,19 @@ private final class SSHConnection {
     private var keepaliveTask: RepeatedTask?
     private var lastCols: Int
     private var lastRows: Int
+
+    /// Updated on every inbound channel read. Used by the keepalive watchdog
+    /// to detect a wedged SSH session (TCP alive but no traffic in either
+    /// direction). All reads/writes happen on the session childChannel's
+    /// eventLoop, so no synchronisation is required.
+    private var lastReadAt: NIODeadline = .now()
+
+    /// If no inbound bytes arrive for this long AND the keepalive write also
+    /// fails to elicit any reply, treat the session as dead and surface a
+    /// typed `idleReadTimeout` error. 5 minutes is well past carrier-grade
+    /// NAT timeouts (~30s for some carriers, 5 min is generous) but short
+    /// enough that a wedged session is caught before the user notices.
+    private let idleReadTimeoutSeconds: Int = 300
 
     func connect() {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -440,29 +466,62 @@ private final class SSHConnection {
 
     private func startKeepalive(on channel: Channel) {
         stopKeepalive()
-        // Resend the current window size every 15s. On macOS/Darwin servers,
-        // the kernel's TIOCSWINSZ handler (tty_ioctl.c) does a bcmp before
-        // pgsignal, so same-dimension requests are true no-ops (no SIGWINCH).
-        // NOTE: Linux kernels do NOT have this guard and WILL deliver SIGWINCH
-        // on every same-size request. This keepalive is only safe for the Mac
-        // Mini (Darwin) target. If the app ever connects to Linux SSH servers,
-        // switch to a different keepalive mechanism.
+        // Reset the read watchdog so a stale value from a previous session
+        // can't immediately trip the timeout on a fresh connection.
+        lastReadAt = .now()
+        // Every 15s, resend the current window size as a SSH channel request.
+        // On macOS/Darwin servers, the kernel's TIOCSWINSZ handler (tty_ioctl.c)
+        // does a bcmp before pgsignal, so same-dimension requests are true
+        // no-ops at the PTY layer (no SIGWINCH). NOTE: Linux kernels do NOT have
+        // this guard and WILL deliver SIGWINCH on every same-size request, so
+        // this keepalive is only safe for the Mac Mini (Darwin) target. If the
+        // app ever connects to Linux SSH servers, switch to a different
+        // keepalive mechanism.
+        //
         // SO_KEEPALIVE on the socket is set as a secondary defence but its
         // default interval (~2h) is too long for carrier-grade NAT timeouts.
+        //
+        // Fail-fast detection has two layers:
+        //   1. The window-change write uses a promise, so a write failure
+        //      (channel closed, broken pipe) immediately surfaces as a typed
+        //      `keepaliveWriteFailed` error.
+        //   2. If no inbound bytes arrive for `idleReadTimeoutSeconds` AND the
+        //      write keeps succeeding (which can happen when the SSH layer is
+        //      wedged but TCP is still alive), surface a typed
+        //      `idleReadTimeout` error and close the session.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
             initialDelay: .seconds(15),
             delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
+
+            // Idle-read watchdog: if nothing has arrived in too long, treat
+            // the session as wedged.
+            let silentFor = NIODeadline.now() - self.lastReadAt
+            if silentFor > .seconds(Int64(self.idleReadTimeoutSeconds)) {
+                let timeout = self.idleReadTimeoutSeconds
+                sshLog.error("SSH idle-read watchdog tripped: no data in \(timeout)s")
+                self.handleError(SSHConnectionError.idleReadTimeout(seconds: timeout))
+                sc.close(promise: nil)
+                return
+            }
+
             let event = SSHChannelRequestEvent.WindowChangeRequest(
                 terminalCharacterWidth: self.lastCols,
                 terminalRowHeight: self.lastRows,
                 terminalPixelWidth: 0,
                 terminalPixelHeight: 0
             )
-            sc.triggerUserOutboundEvent(event, promise: nil)
+            let writePromise = sc.eventLoop.makePromise(of: Void.self)
+            sc.triggerUserOutboundEvent(event, promise: writePromise)
+            writePromise.futureResult.whenFailure { [weak self] error in
+                guard let self else { return }
+                sshLog.error("SSH keepalive write failed: \(error)")
+                self.handleError(SSHConnectionError.keepaliveWriteFailed(underlying: error))
+                self.sessionChannel?.close(promise: nil)
+            }
         }
-        sshLog.info("SSH keepalive started (15s window-change interval)")
+        sshLog.info("SSH keepalive started (15s window-change, \(self.idleReadTimeoutSeconds)s idle-read watchdog)")
     }
 
     private func stopKeepalive() {
@@ -490,12 +549,22 @@ private final class SSHConnection {
                     }
 
                     return childChannel.eventLoop.makeCompletedFuture {
+                        // Wrap onData so every inbound chunk also touches the
+                        // idle-read watchdog. The handler invokes this on the
+                        // session childChannel's eventLoop, which is the same
+                        // loop the keepalive runs on, so no synchronisation is
+                        // required for `lastReadAt`.
+                        let upstreamOnData = self.onData
+                        let onDataWithTouch: @Sendable (Data) -> Void = { [weak self] data in
+                            self?.lastReadAt = .now()
+                            upstreamOnData(data)
+                        }
                         let handler = ShellChannelHandler(
                             term: "xterm-256color",
                             environment: ["LANG": "en_US.UTF-8"],
                             initialCols: self.initialCols,
                             initialRows: self.initialRows,
-                            onData: self.onData,
+                            onData: onDataWithTouch,
                             onClose: self.onDisconnect,
                             onReady: self.onConnected  // BUG FIX: onConnected wired to onReady
                         )
@@ -517,7 +586,10 @@ private final class SSHConnection {
                         self.sessionChannel = childChannel
                         // BUG FIX: Do NOT call onConnected here — wait for ChannelSuccessEvent
                         sshLog.info("SSH session channel created, waiting for shell ready...")
-                        // Start keepalive — send a zero-length NOP every 15s to prevent idle disconnect
+                        // Start keepalive: 15s window-change request to keep
+                        // NAT warm, plus a 5-min idle-read watchdog and a
+                        // write-failure detector for fail-fast on dead
+                        // sessions (typed errors via SSHConnectionError).
                         self.startKeepalive(on: childChannel)
                     }
                 }
