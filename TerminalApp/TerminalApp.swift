@@ -209,6 +209,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     /// Posts /events/push-rendered if the notification carries a server-injected
     /// `_trace_id`. Used by the operator to confirm a push reached the device.
+    /// Captures `appState` from UIApplication so the operator can answer
+    /// "where was the user when the OS routed it?" rather than only the
+    /// foreground/tap/background delegate flag.
     private func reportPushRender(_ userInfo: [AnyHashable: Any], kind: PushRenderedKind) {
         guard let traceId = PushTraceEmitter.traceId(in: userInfo),
               let server = self.server,
@@ -217,9 +220,29 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             traceId: traceId,
             bundleID: "com.timtrailor.terminal",
             kind: kind,
+            appState: AppDelegate.currentAppState(),
             serverURL: url,
             bearerToken: server.authToken.isEmpty ? nil : server.authToken
         )
+    }
+
+    /// Snapshots UIApplication state at this exact moment for the
+    /// push-rendered trace. Maps the iOS enum onto the server-side
+    /// allowlist (active / inactive / background / locked / unknown).
+    /// `locked` is derived from `isProtectedDataAvailable` being false
+    /// because UIApplication.State has no first-class locked value.
+    /// Always called on the main thread (UNUserNotificationCenter
+    /// delegates fire there).
+    static func currentAppState() -> PushAppState {
+        if !UIApplication.shared.isProtectedDataAvailable {
+            return .locked
+        }
+        switch UIApplication.shared.applicationState {
+        case .active: return .active
+        case .inactive: return .inactive
+        case .background: return .background
+        @unknown default: return .unknown
+        }
     }
 
     // Tap on a delivered notification → deep-link to its tab.
