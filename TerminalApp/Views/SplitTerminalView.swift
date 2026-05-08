@@ -237,6 +237,17 @@ struct SplitTerminalView: View {
         }
     }
 
+    /// Single point of truth for purging every per-tab dictionary when a
+    /// tmux window goes away. Adding a new per-tab map only needs an
+    /// extra removeValue call here, so the .onChange(tmuxWindowIndices)
+    /// handler does not need to be edited in lockstep.
+    private func cleanupTab(id: Int) {
+        perTabLines.removeValue(forKey: id)
+        perTabInput.removeValue(forKey: id)
+        sentTextStack.removeValue(forKey: id)
+        perTabPaneHash.removeValue(forKey: id)
+    }
+
     private var paneLines: [PaneLine] {
         perTabLines[activeWindowIndex] ?? []
     }
@@ -420,17 +431,12 @@ struct SplitTerminalView: View {
             Task { await refreshPane() }
         }
         .onChange(of: tmuxWindowIndices) { _, liveIndices in
-            for key in perTabLines.keys where !liveIndices.contains(key) {
-                perTabLines.removeValue(forKey: key)
-            }
-            for key in perTabInput.keys where !liveIndices.contains(key) {
-                perTabInput.removeValue(forKey: key)
-            }
-            for key in sentTextStack.keys where !liveIndices.contains(key) {
-                sentTextStack.removeValue(forKey: key)
-            }
-            for key in perTabPaneHash.keys where !liveIndices.contains(key) {
-                perTabPaneHash.removeValue(forKey: key)
+            let allKeys = Set(perTabLines.keys)
+                .union(perTabInput.keys)
+                .union(sentTextStack.keys)
+                .union(perTabPaneHash.keys)
+            for key in allKeys where !liveIndices.contains(key) {
+                cleanupTab(id: key)
             }
             saveDrafts()
         }
