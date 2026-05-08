@@ -719,13 +719,42 @@ struct SplitTerminalView: View {
         }
     }
 
+    /// Collapse contiguous runs of `.superseded` lines into a single
+    /// placeholder. Without this, a response-gate retry leaves the entire
+    /// previous turn dimmed-and-strikethrough'd in the scrollback, which
+    /// reads as "the response is duplicated" even though only the latest
+    /// turn is live. The placeholder keeps the user aware that a retry
+    /// happened without flooding the visible pane.
+    private func collapseSupersededRuns(_ lines: [PaneLine]) -> [PaneLine] {
+        guard !lines.isEmpty else { return lines }
+        var out: [PaneLine] = []
+        out.reserveCapacity(lines.count)
+        var inRun = false
+        for line in lines {
+            if line.lineType == .superseded {
+                if inRun { continue }
+                inRun = true
+                out.append(PaneLine(
+                    id: line.id,
+                    text: "[superseded — earlier response replaced by retry]",
+                    lineType: .superseded
+                ))
+            } else {
+                inRun = false
+                out.append(line)
+            }
+        }
+        return out
+    }
+
     private func buildPaneNSAttributed(_ lines: [PaneLine]) -> NSAttributedString {
+        let collapsed = collapseSupersededRuns(lines)
         let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         let para = NSMutableParagraphStyle()
         para.lineSpacing = 1
         para.lineBreakMode = .byWordWrapping
         let result = NSMutableAttributedString()
-        for (idx, line) in lines.enumerated() {
+        for (idx, line) in collapsed.enumerated() {
             let raw = line.text.isEmpty ? " " : line.text
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -737,7 +766,7 @@ struct SplitTerminalView: View {
                 attrs[.strikethroughColor] = UIColor.gray.withAlphaComponent(0.6)
             }
             result.append(NSAttributedString(string: raw, attributes: attrs))
-            if idx < lines.count - 1 {
+            if idx < collapsed.count - 1 {
                 result.append(NSAttributedString(string: "\n", attributes: attrs))
             }
         }
@@ -962,6 +991,64 @@ struct SplitTerminalView: View {
             assert(
                 got == fixture.expected,
                 "classifyLines fixture failed: \(fixture.name) expected \(fixture.expected) got \(got)"
+            )
+        }
+        runCollapseSupersededSelfTest()
+    }
+
+    private func runCollapseSupersededSelfTest() {
+        func line(_ id: Int, _ text: String, _ type: LineType) -> PaneLine {
+            PaneLine(id: id, text: text, lineType: type)
+        }
+        let fixtures: [(name: String, input: [PaneLine], expectedTypes: [LineType], expectedTexts: [String])] = [
+            (
+                "no superseded lines passes through",
+                [line(0, "hello", .userInput), line(1, "world", .claudeText)],
+                [.userInput, .claudeText],
+                ["hello", "world"]
+            ),
+            (
+                "single superseded line collapses to placeholder",
+                [line(0, "old", .superseded), line(1, "new", .claudeText)],
+                [.superseded, .claudeText],
+                ["[superseded — earlier response replaced by retry]", "new"]
+            ),
+            (
+                "contiguous superseded run collapses to one placeholder",
+                [
+                    line(0, "old1", .superseded),
+                    line(1, "old2", .superseded),
+                    line(2, "old3", .superseded),
+                    line(3, "new", .claudeText),
+                ],
+                [.superseded, .claudeText],
+                ["[superseded — earlier response replaced by retry]", "new"]
+            ),
+            (
+                "two separate runs collapse to two placeholders",
+                [
+                    line(0, "a", .superseded),
+                    line(1, "live", .claudeText),
+                    line(2, "b", .superseded),
+                    line(3, "c", .superseded),
+                    line(4, "after", .userInput),
+                ],
+                [.superseded, .claudeText, .superseded, .userInput],
+                [
+                    "[superseded — earlier response replaced by retry]",
+                    "live",
+                    "[superseded — earlier response replaced by retry]",
+                    "after",
+                ]
+            ),
+        ]
+        for fixture in fixtures {
+            let got = collapseSupersededRuns(fixture.input)
+            let gotTypes = got.map(\.lineType)
+            let gotTexts = got.map(\.text)
+            assert(
+                gotTypes == fixture.expectedTypes && gotTexts == fixture.expectedTexts,
+                "collapseSupersededRuns fixture failed: \(fixture.name)"
             )
         }
     }
