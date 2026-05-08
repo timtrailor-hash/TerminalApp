@@ -772,6 +772,12 @@ struct TerminalView: View {
         guard !connectInFlight else { return }
         connectInFlight = true
         Task { @MainActor in
+            // Always release the in-flight flag, even when the Task is
+            // cancelled or one of the awaited calls throws. Without
+            // defer, an interrupted cold-launch connect would leave
+            // connectInFlight == true forever and block every future
+            // autoConnect / scenePhase reconnect.
+            defer { connectInFlight = false }
             await ssh.connect(host: serverIP, username: sshUsername, password: sshPassword)
             // Auto-start tmux so tab bar and session persistence work
             // -A: attach if session exists, -s mobile: named session
@@ -787,7 +793,6 @@ struct TerminalView: View {
             if let token = UserDefaults.standard.string(forKey: "apnsDeviceToken") {
                 registerDeviceToken(token)
             }
-            connectInFlight = false
         }
     }
 
