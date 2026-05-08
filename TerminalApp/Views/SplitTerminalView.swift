@@ -343,7 +343,7 @@ struct SplitTerminalView: View {
         let lineType: LineType
     }
 
-    enum LineType {
+    enum LineType: Equatable {
         case userInput     // Lines the user typed (prompt lines)
         case claudeText    // Claude's response text
         case system        // Tool use, system info, etc.
@@ -770,6 +770,15 @@ struct SplitTerminalView: View {
     /// starts with `❯ `; the rest are indented continuations that used to be
     /// rendered as `.claudeText` (grey) and leak out of the highlight.
     private func classifyLines(_ lines: [String]) -> [LineType] {
+        #if DEBUG
+        Self._classifySelfTestLock.lock()
+        let alreadyRan = Self._classifySelfTestRan
+        if !alreadyRan { Self._classifySelfTestRan = true }
+        Self._classifySelfTestLock.unlock()
+        if !alreadyRan {
+            runClassifySelfTest()
+        }
+        #endif
         var result: [LineType] = []
         result.reserveCapacity(lines.count)
         var inPrompt = false
@@ -844,25 +853,46 @@ struct SplitTerminalView: View {
             if inPrompt {
                 // A prompt continuation is either an indented wrap of the
                 // previous user line, or a blank line inside a multi-line
-                // prompt. It must start with actual prose (a letter or
-                // common opening punctuation) — Claude Code's streaming
+                // prompt. It must start with actual prose (a letter, digit,
+                // or quote character). Claude Code's streaming
                 // "Thinking..." placeholders start with special indicator
                 // chars like `›`, `*`, `·`, `⎿` and must NOT be coloured as
                 // user input even when indented.
+                //
+                // `-` is excluded from the prose set because Claude tool
+                // output frequently starts with `- bullet`. `[` is admitted
+                // for human prose like `[NOTE: ...]` but the explicit
+                // `[N]` reference pattern (`[1] Reading...`) is filtered
+                // out below before the prose check.
+                //
+                // Indent: Claude Code wraps user prompt continuations at
+                // exactly 2 spaces. Markdown code blocks indent 4+ and
+                // should fall through to .claudeText. Allow 2 only.
                 let leadingWhitespace = raw.prefix(while: { $0 == " " }).count
                 if trimmed.isEmpty {
                     result.append(.userInput)
                     continue
                 }
+                // [N] reference pattern (e.g. "[1] Reading file..."): this
+                // is Claude tool output even when indented. Range-based
+                // regex match keeps the rest of the prose check simple.
+                let isNumericBracketRef = trimmed.range(
+                    of: #"^\[\d+\]"#,
+                    options: .regularExpression
+                ) != nil
                 let first = trimmed.first
                 let looksLikeProse = first.map { ch -> Bool in
                     if ch.isLetter || ch.isNumber { return true }
-                    return "\"'(\u{201C}\u{2018}[-".contains(ch)
+                    return "\"'(\u{201C}\u{2018}[".contains(ch)
                 } ?? false
-                if leadingWhitespace >= 2 && looksLikeProse {
+                if leadingWhitespace == 2 && looksLikeProse && !isNumericBracketRef {
                     result.append(.userInput)
                     continue
                 }
+                // First line that fails the continuation check ends the
+                // prompt window. Subsequent lines re-evaluate from scratch
+                // against the chevron / box-drawing / working-indicator
+                // checks at the top of the loop.
                 inPrompt = false
             }
 
@@ -881,6 +911,54 @@ struct SplitTerminalView: View {
 
         return result
     }
+
+    #if DEBUG
+    /// Fixture-driven regression test for `classifyLines`. Runs once per
+    /// process the first time the function is invoked on a real view
+    /// instance. Each fixture is a (name, input lines, expected types)
+    /// triple. Any mismatch triggers `assertionFailure` so the next edge
+    /// case fails LOUD instead of silently regressing colour mapping.
+    /// Release builds compile this out entirely.
+    private static let _classifySelfTestLock = NSLock()
+    nonisolated(unsafe) private static var _classifySelfTestRan = false
+
+    private func runClassifySelfTest() {
+        let fixtures: [(name: String, input: [String], expected: [LineType])] = [
+            (
+                "bullet after chevron stays Claude",
+                ["❯ run the command", "  - using Read tool"],
+                [.userInput, .claudeText]
+            ),
+            (
+                "[1] reference after chevron stays Claude",
+                ["❯ ok", "  [1] Reading file..."],
+                [.userInput, .claudeText]
+            ),
+            (
+                "[NOTE] prose after chevron stays user",
+                ["❯ here is context", "  [NOTE: see attached]"],
+                [.userInput, .userInput]
+            ),
+            (
+                "code block (4 spaces) after chevron stays Claude",
+                ["❯ here", "    let x = 1"],
+                [.userInput, .claudeText]
+            ),
+            (
+                "two-space prose continuation stays user",
+                ["❯ first line", "  second line"],
+                [.userInput, .userInput]
+            ),
+        ]
+        for fixture in fixtures {
+            let got = classifyLines(fixture.input)
+            assert(
+                got == fixture.expected,
+                "classifyLines fixture failed: \(fixture.name) expected \(fixture.expected) got \(got)"
+            )
+        }
+    }
+    #endif
 
     private var hasEnrichedPrompt: Bool {
         pendingApproval && promptId > lastAnsweredPromptId && !pendingIntent.isEmpty
