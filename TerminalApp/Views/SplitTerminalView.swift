@@ -351,37 +351,44 @@ struct SplitTerminalView: View {
     }
 
     var body: some View {
-        outputSection
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea(.keyboard)
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { updateTmuxPaneSize(outputSize: geo.size) }
-                        .onReceive(NotificationCenter.default.publisher(
-                            for: UIDevice.orientationDidChangeNotification
-                        )) { _ in
-                            updateTmuxPaneSize(outputSize: geo.size)
-                        }
-                }
-            )
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    if !effectivePromptOptions.isEmpty {
-                        promptOptionsRow
+        // VStack-based layout (no safeAreaInset + ignoresSafeArea(.keyboard) chain).
+        // The previous chain placed the input row behind the keyboard's predictive
+        // bar: ignoresSafeArea(.keyboard) zeroed the underlying view's bottom
+        // keyboard safe-area inset, and safeAreaInset then anchored the input row
+        // to the screen bottom rather than above the keyboard. With a plain VStack
+        // the input row is the last child and lifts above the keyboard naturally.
+        // Tmux rows stay pegged to the screen height in updateTmuxPaneSize, so the
+        // server-side pane size is unchanged when the keyboard shrinks the visible
+        // output pane.
+        VStack(spacing: 0) {
+            outputSection
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { updateTmuxPaneSize(outputSize: geo.size) }
+                            .onReceive(NotificationCenter.default.publisher(
+                                for: UIDevice.orientationDidChangeNotification
+                            )) { _ in
+                                updateTmuxPaneSize(outputSize: geo.size)
+                            }
                     }
+                )
 
-                    if showQueueEditButton && effectivePromptOptions.isEmpty {
-                        queueEditRow
-                    }
-
-                    Divider()
-                        .background(AppTheme.accent.opacity(0.3))
-
-                    inputSection
-                        .frame(minHeight: 56, maxHeight: 120)
-                }
+            if !effectivePromptOptions.isEmpty {
+                promptOptionsRow
             }
+
+            if showQueueEditButton && effectivePromptOptions.isEmpty {
+                queueEditRow
+            }
+
+            Divider()
+                .background(AppTheme.accent.opacity(0.3))
+
+            inputSection
+                .frame(minHeight: 56, maxHeight: 120)
+        }
         .background(AppTheme.background)
         .overlay(alignment: .top) {
             if let msg = toastMessage {
