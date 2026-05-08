@@ -109,6 +109,10 @@ struct TerminalView: View {
     @State private var showRenameAlert: Bool = false
     @State private var tmuxPollTimer: Timer?
     @State private var tmuxPollFailed = false
+    /// Short human-readable reason for the most recent tmux-windows failure
+    /// (decode error vs schema mismatch). Surfaces next to the warning icon
+    /// so a silently-frozen tab bar is no longer ambiguous.
+    @State private var tmuxPollFailureReason: String? = nil
     @State private var isExporting = false
     @State private var exportStatus: String?
     @State private var exportStatusIsError = false
@@ -165,10 +169,18 @@ struct TerminalView: View {
                 HStack(spacing: 4) {
                     tmuxTabBar
                     if tmuxPollFailed {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.orange)
-                            .padding(.trailing, 8)
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.orange)
+                            if let reason = tmuxPollFailureReason {
+                                Text(reason)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.trailing, 8)
                     }
                 }
             }
@@ -680,20 +692,36 @@ struct TerminalView: View {
                 }
             }
 
+            // 4 kB is enough to capture a full structured error body or a
+            // surprise HTML/proxy response without flooding the log when the
+            // server serves a giant payload.
+            let rawTruncated: () -> String = {
+                String(data: data.prefix(4096), encoding: .utf8) ?? "<binary>"
+            }
             do {
                 let typed = try JSONDecoder().decode(TimSharedKit.TmuxWindowsResponse.self, from: data)
                 guard typed.schemaVersion == TimSharedKit.ContractsSchemaVersion else {
-                    let raw = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
-                    termLog.error("tmux-windows schema mismatch (got \(typed.schemaVersion), want \(TimSharedKit.ContractsSchemaVersion)): \(raw)")
-                    DispatchQueue.main.async { self.tmuxPollFailed = true }
+                    let raw = rawTruncated()
+                    let reason = "schema v\(typed.schemaVersion) ≠ v\(TimSharedKit.ContractsSchemaVersion)"
+                    termLog.error("tmux-windows schema mismatch (\(reason)): \(raw)")
+                    DispatchQueue.main.async {
+                        self.tmuxPollFailed = true
+                        self.tmuxPollFailureReason = reason
+                    }
                     return
                 }
-                DispatchQueue.main.async { self.tmuxPollFailed = false }
+                DispatchQueue.main.async {
+                    self.tmuxPollFailed = false
+                    self.tmuxPollFailureReason = nil
+                }
                 applyWindows(typed.windows.map(translateContractsTmuxWindow))
             } catch {
-                let raw = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+                let raw = rawTruncated()
                 termLog.error("tmux-windows decode failed: \(error.localizedDescription) raw: \(raw)")
-                DispatchQueue.main.async { self.tmuxPollFailed = true }
+                DispatchQueue.main.async {
+                    self.tmuxPollFailed = true
+                    self.tmuxPollFailureReason = "tmux poll: decode error"
+                }
             }
         }.resume()
     }
