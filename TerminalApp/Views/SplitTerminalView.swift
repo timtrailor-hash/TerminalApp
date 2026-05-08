@@ -844,11 +844,21 @@ struct SplitTerminalView: View {
             if inPrompt {
                 // A prompt continuation is either an indented wrap of the
                 // previous user line, or a blank line inside a multi-line
-                // prompt. It must start with actual prose (a letter or
-                // common opening punctuation) — Claude Code's streaming
+                // prompt. It must start with actual prose (a letter, digit,
+                // or quote character). Claude Code's streaming
                 // "Thinking..." placeholders start with special indicator
                 // chars like `›`, `*`, `·`, `⎿` and must NOT be coloured as
                 // user input even when indented.
+                //
+                // `[` and `-` are deliberately NOT in the prose set: Claude
+                // tool output frequently starts with `[1] ...` or `- bullet`,
+                // and we want those to fall through to .claudeText rather
+                // than inherit user-input colour.
+                //
+                // Indent ceiling of 3 spaces: Claude Code wraps user prompt
+                // continuations at exactly 2 spaces. Markdown code blocks
+                // indent 4 spaces and should NOT be classified as user input
+                // even if they happen to follow a chevron line.
                 let leadingWhitespace = raw.prefix(while: { $0 == " " }).count
                 if trimmed.isEmpty {
                     result.append(.userInput)
@@ -857,9 +867,9 @@ struct SplitTerminalView: View {
                 let first = trimmed.first
                 let looksLikeProse = first.map { ch -> Bool in
                     if ch.isLetter || ch.isNumber { return true }
-                    return "\"'(\u{201C}\u{2018}[-".contains(ch)
+                    return "\"'(\u{201C}\u{2018}".contains(ch)
                 } ?? false
-                if leadingWhitespace >= 2 && looksLikeProse {
+                if leadingWhitespace >= 2 && leadingWhitespace <= 3 && looksLikeProse {
                     result.append(.userInput)
                     continue
                 }
