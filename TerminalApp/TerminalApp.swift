@@ -199,6 +199,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // tab so the user sees Claude's reply without switching away.
         let info = notification.request.content.userInfo
         reportPushRender(info, kind: .foreground)
+        emitButtonRenderedTelemetry(for: notification)
         if let window = AppDelegate.windowIndex(from: info) {
             NotificationCenter.default.post(name: .paneRefreshRequested,
                                             object: nil,
@@ -245,6 +246,125 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
+    /// Same snapshot mapped onto the focus-state allowlist used by the
+    /// /telemetry/events endpoint. Kept separate from `PushAppState` so
+    /// each surface can evolve its allowlist independently.
+    static func currentFocusState() -> ButtonTelemetryFocus {
+        if !UIApplication.shared.isProtectedDataAvailable {
+            return .locked
+        }
+        switch UIApplication.shared.applicationState {
+        case .active: return .foreground
+        case .inactive: return .inactive
+        case .background: return .background
+        @unknown default: return .unknown
+        }
+    }
+
+    /// The set of action button verbs the OS will surface for a given
+    /// notification category. Used to emit one button.rendered event per
+    /// visible action button so the server-side
+    /// `button_vanish_no_interaction` metric has the rendered side of
+    /// the pair to compare against.
+    private static func actionVerbs(forCategory category: String) -> [String] {
+        switch category {
+        case "PROPOSAL_ACTIONS": return ["accept", "reject", "discuss"]
+        case "BRIDGE_REQUEST":   return ["approve", "deny"]
+        default: return []
+        }
+    }
+
+    /// Posts button.rendered events to /telemetry/events for each action
+    /// button the OS will surface on this notification. Only fires when
+    /// the payload carries a server-injected `_trace_id` so the server
+    /// can correlate render events back to its own push.decide row.
+    /// Fire-and-forget; observability only.
+    private func emitButtonRenderedTelemetry(for notification: UNNotification) {
+        let info = notification.request.content.userInfo
+        let category = notification.request.content.categoryIdentifier
+        let verbs = AppDelegate.actionVerbs(forCategory: category)
+        guard !verbs.isEmpty,
+              let traceId = PushTraceEmitter.traceId(in: info),
+              let server = self.server,
+              let url = URL(string: server.baseURL) else { return }
+        let focus = AppDelegate.currentFocusState()
+        let events = verbs.map { verb in
+            ButtonTelemetryEvent(
+                eventType: .rendered,
+                buttonId: "\(traceId):\(verb)",
+                bundleId: "com.timtrailor.terminal",
+                traceId: traceId,
+                focusState: focus,
+                tapTarget: verb
+            )
+        }
+        ButtonTelemetryEmitter.report(
+            events: events,
+            serverURL: url,
+            bearerToken: server.authToken.isEmpty ? nil : server.authToken
+        )
+    }
+
+    /// Posts a button.tapped + button.removed(reason=tap) pair for the
+    /// tapped action verb, so the server can both count the tap and
+    /// pair it with its rendered counterpart. Tapped is the only removal
+    /// reason the iOS side can observe directly.
+    private func emitButtonTappedTelemetry(traceId: String, verb: String) {
+        guard let server = self.server,
+              let url = URL(string: server.baseURL) else { return }
+        let focus = AppDelegate.currentFocusState()
+        let buttonId = "\(traceId):\(verb)"
+        let events: [ButtonTelemetryEvent] = [
+            ButtonTelemetryEvent(
+                eventType: .tapped,
+                buttonId: buttonId,
+                bundleId: "com.timtrailor.terminal",
+                traceId: traceId,
+                focusState: focus,
+                tapTarget: verb
+            ),
+            ButtonTelemetryEvent(
+                eventType: .removed,
+                buttonId: buttonId,
+                bundleId: "com.timtrailor.terminal",
+                traceId: traceId,
+                focusState: focus,
+                removalReason: .tap
+            ),
+        ]
+        ButtonTelemetryEmitter.report(
+            events: events,
+            serverURL: url,
+            bearerToken: server.authToken.isEmpty ? nil : server.authToken
+        )
+    }
+
+    /// Posts button.removed(reason=dismiss) for every rendered button when
+    /// the user dismisses the banner without picking an action. Lets the
+    /// server pair render with removal even on a swipe-away.
+    private func emitButtonDismissedTelemetry(category: String, traceId: String) {
+        guard let server = self.server,
+              let url = URL(string: server.baseURL) else { return }
+        let focus = AppDelegate.currentFocusState()
+        let verbs = AppDelegate.actionVerbs(forCategory: category)
+        guard !verbs.isEmpty else { return }
+        let events = verbs.map { verb in
+            ButtonTelemetryEvent(
+                eventType: .removed,
+                buttonId: "\(traceId):\(verb)",
+                bundleId: "com.timtrailor.terminal",
+                traceId: traceId,
+                focusState: focus,
+                removalReason: .dismiss
+            )
+        }
+        ButtonTelemetryEmitter.report(
+            events: events,
+            serverURL: url,
+            bearerToken: server.authToken.isEmpty ? nil : server.authToken
+        )
+    }
+
     // Tap on a delivered notification → deep-link to its tab.
     // Actionable-button taps on a proposal notification → POST the action
     // to the alert-responder endpoint so it fires even when the app is
@@ -255,6 +375,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         let info = response.notification.request.content.userInfo
         reportPushRender(info, kind: .tap)
         let actionId = response.actionIdentifier
+        let category = response.notification.request.content.categoryIdentifier
 
         // Map the iOS-side action identifier to the server-side action verb.
         let proposalAction: String? = {
@@ -265,6 +386,23 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             default: return nil
             }
         }()
+
+        // Emit telemetry whenever the notification carried a trace_id, so
+        // the server can pair tapped/dismissed with its earlier rendered
+        // events. UNNotificationDismissActionIdentifier fires when the
+        // user explicitly swipes a banner away (we registered for it via
+        // .customDismissAction on the categories above).
+        if let traceId = PushTraceEmitter.traceId(in: info) {
+            if let verb = proposalAction {
+                emitButtonTappedTelemetry(traceId: traceId, verb: verb)
+            } else if actionId == "BRIDGE_APPROVE" {
+                emitButtonTappedTelemetry(traceId: traceId, verb: "approve")
+            } else if actionId == "BRIDGE_DENY" {
+                emitButtonTappedTelemetry(traceId: traceId, verb: "deny")
+            } else if actionId == UNNotificationDismissActionIdentifier {
+                emitButtonDismissedTelemetry(category: category, traceId: traceId)
+            }
+        }
 
         // Hook-ASK pushes (kind="hook_ask") share the PROPOSAL_ACTIONS
         // category so the lock-screen surfaces Accept / Reject / Discuss,
