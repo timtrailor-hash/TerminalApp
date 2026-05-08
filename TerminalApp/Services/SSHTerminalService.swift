@@ -364,17 +364,18 @@ private final class SSHConnection {
     private var lastCols: Int
     private var lastRows: Int
 
-    /// Updated on every inbound channel read. Used by the keepalive watchdog
-    /// to detect a wedged SSH session (TCP alive but no traffic in either
-    /// direction). All reads/writes happen on the session childChannel's
-    /// eventLoop, so no synchronisation is required.
+    /// Updated on every inbound channel read AND on every successful keepalive
+    /// write. Used by the keepalive watchdog to detect a wedged SSH session
+    /// (TCP alive but neither side making progress). All reads/writes happen
+    /// on the session childChannel's eventLoop; the data path asserts this
+    /// invariant rather than rely on a comment.
     private var lastReadAt: NIODeadline = .now()
 
-    /// If no inbound bytes arrive for this long AND the keepalive write also
-    /// fails to elicit any reply, treat the session as dead and surface a
-    /// typed `idleReadTimeout` error. 5 minutes is well past carrier-grade
-    /// NAT timeouts (~30s for some carriers, 5 min is generous) but short
-    /// enough that a wedged session is caught before the user notices.
+    /// If no inbound bytes arrive for this long AND no keepalive write
+    /// succeeds either, treat the session as wedged. The window-change
+    /// keepalive elicits no application-layer reply on a healthy idle PTY,
+    /// so we treat a successful write as evidence of liveness — the
+    /// watchdog only fires when both writes and reads stall.
     private let idleReadTimeoutSeconds: Int = 300
 
     func connect() {
@@ -482,25 +483,25 @@ private final class SSHConnection {
         // default interval (~2h) is too long for carrier-grade NAT timeouts.
         //
         // Fail-fast detection has two layers:
-        //   1. The window-change write uses a promise, so a write failure
-        //      (channel closed, broken pipe) immediately surfaces as a typed
+        //   1. The window-change write uses a promise. A write failure (channel
+        //      closed, broken pipe) immediately surfaces as a typed
         //      `keepaliveWriteFailed` error.
-        //   2. If no inbound bytes arrive for `idleReadTimeoutSeconds` AND the
-        //      write keeps succeeding (which can happen when the SSH layer is
-        //      wedged but TCP is still alive), surface a typed
-        //      `idleReadTimeout` error and close the session.
+        //   2. The watchdog checks `lastReadAt`. A successful write also
+        //      counts as liveness (a healthy idle PTY does not echo bytes back
+        //      for window-change requests), so the watchdog only fires when
+        //      BOTH writes and reads have stopped progressing — the wedged-
+        //      TCP scenario where the kernel happily accepts our writes but
+        //      nothing flows back.
         keepaliveTask = channel.eventLoop.scheduleRepeatedTask(
             initialDelay: .seconds(15),
             delay: .seconds(15)
         ) { [weak self] _ in
             guard let self, let sc = self.sessionChannel else { return }
 
-            // Idle-read watchdog: if nothing has arrived in too long, treat
-            // the session as wedged.
             let silentFor = NIODeadline.now() - self.lastReadAt
             if silentFor > .seconds(Int64(self.idleReadTimeoutSeconds)) {
                 let timeout = self.idleReadTimeoutSeconds
-                sshLog.error("SSH idle-read watchdog tripped: no data in \(timeout)s")
+                sshLog.error("SSH idle-read watchdog tripped: no progress in \(timeout)s")
                 self.handleError(SSHConnectionError.idleReadTimeout(seconds: timeout))
                 sc.close(promise: nil)
                 return
@@ -514,11 +515,20 @@ private final class SSHConnection {
             )
             let writePromise = sc.eventLoop.makePromise(of: Void.self)
             sc.triggerUserOutboundEvent(event, promise: writePromise)
-            writePromise.futureResult.whenFailure { [weak self] error in
+            writePromise.futureResult.whenComplete { [weak self] result in
                 guard let self else { return }
-                sshLog.error("SSH keepalive write failed: \(error)")
-                self.handleError(SSHConnectionError.keepaliveWriteFailed(underlying: error))
-                self.sessionChannel?.close(promise: nil)
+                switch result {
+                case .success:
+                    // A successful write proves the SSH/TCP path is alive in
+                    // the outbound direction. Count it as liveness so the
+                    // watchdog does not trip on a healthy idle session where
+                    // the server simply has nothing to send.
+                    self.lastReadAt = .now()
+                case .failure(let error):
+                    sshLog.error("SSH keepalive write failed: \(error)")
+                    self.handleError(SSHConnectionError.keepaliveWriteFailed(underlying: error))
+                    self.sessionChannel?.close(promise: nil)
+                }
             }
         }
         sshLog.info("SSH keepalive started (15s window-change, \(self.idleReadTimeoutSeconds)s idle-read watchdog)")
@@ -550,12 +560,15 @@ private final class SSHConnection {
 
                     return childChannel.eventLoop.makeCompletedFuture {
                         // Wrap onData so every inbound chunk also touches the
-                        // idle-read watchdog. The handler invokes this on the
-                        // session childChannel's eventLoop, which is the same
-                        // loop the keepalive runs on, so no synchronisation is
-                        // required for `lastReadAt`.
+                        // idle-read watchdog. ShellChannelHandler.channelRead
+                        // delivers data on the session childChannel's
+                        // eventLoop — the same loop the keepalive runs on, so
+                        // `lastReadAt` is single-writer. Assert the invariant
+                        // explicitly rather than rely on a comment.
                         let upstreamOnData = self.onData
+                        let watchdogLoop = childChannel.eventLoop
                         let onDataWithTouch: @Sendable (Data) -> Void = { [weak self] data in
+                            watchdogLoop.assertInEventLoop()
                             self?.lastReadAt = .now()
                             upstreamOnData(data)
                         }
@@ -668,7 +681,14 @@ final class SSHTerminalService: ObservableObject {
             onDisconnect: { [weak self] in
                 Task { @MainActor in
                     self?.isConnected = false
-                    self?.connectionError = "Disconnected"
+                    // Don't overwrite a typed error from `onError` (which is
+                    // enqueued just before this `onDisconnect` whenever the
+                    // close was triggered by the keepalive watchdog or write
+                    // failure). Only stamp the generic "Disconnected" string
+                    // when no typed error has surfaced.
+                    if self?.connectionError == nil {
+                        self?.connectionError = "Disconnected"
+                    }
                     sshLog.info("Session ended")
                 }
             }
