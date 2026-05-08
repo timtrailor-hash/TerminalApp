@@ -127,6 +127,16 @@ struct TerminalView: View {
     /// typed prose and submit as one message. Cleared by the consumer.
     @State private var pendingPathsToConsume: [String] = []
 
+    /// Synchronous in-flight guard for connectSSH(). The Task that
+    /// drives ssh.connect() awaits before flipping ssh.isConnecting,
+    /// so a rapid second call (onAppear + scenePhase becoming active,
+    /// or onAppear firing twice) can race past the isConnecting check
+    /// and schedule a duplicate Task. Both Tasks then push duplicate
+    /// `tmux new-session` and reconnect commandRunner. Setting this
+    /// flag synchronously inside connectSSH() before the Task is
+    /// scheduled prevents the race.
+    @State private var connectInFlight = false
+
     private var serverIP: String {
         String(server.serverHost.split(separator: ":").first ?? "100.126.253.40")
     }
@@ -759,7 +769,15 @@ struct TerminalView: View {
 
     private func connectSSH() {
         guard !sshPassword.isEmpty else { return }
-        Task {
+        guard !connectInFlight else { return }
+        connectInFlight = true
+        Task { @MainActor in
+            // Always release the in-flight flag, even when the Task is
+            // cancelled or one of the awaited calls throws. Without
+            // defer, an interrupted cold-launch connect would leave
+            // connectInFlight == true forever and block every future
+            // autoConnect / scenePhase reconnect.
+            defer { connectInFlight = false }
             await ssh.connect(host: serverIP, username: sshUsername, password: sshPassword)
             // Auto-start tmux so tab bar and session persistence work
             // -A: attach if session exists, -s mobile: named session
@@ -780,6 +798,9 @@ struct TerminalView: View {
 
     private func reconnect() {
         ssh.disconnect()
+        // Explicit reconnect overrides any in-flight connect Task (the
+        // user just disconnected, so any stale connect is irrelevant).
+        connectInFlight = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             connectSSH()
         }
@@ -798,7 +819,7 @@ struct TerminalView: View {
     }
 
     private func autoConnect() {
-        if !ssh.isConnected && !ssh.isConnecting && !sshPassword.isEmpty {
+        if !ssh.isConnected && !ssh.isConnecting && !connectInFlight && !sshPassword.isEmpty {
             connectSSH()
         }
     }
@@ -910,7 +931,14 @@ struct TerminalView: View {
     }
 
     private func uploadPendingFiles() {
+        // Two rapid taps on the upload button can fire concurrent
+        // multipart POSTs that each consume `pendingFiles`, so the same
+        // photos upload twice and `pendingPathsToConsume` is overwritten
+        // by whichever Task wins the race. Bail out synchronously when
+        // a previous upload is still in flight.
+        guard !isUploading else { return }
         let files = pendingFiles
+        guard !files.isEmpty else { return }
         isUploading = true
 
         Task {
